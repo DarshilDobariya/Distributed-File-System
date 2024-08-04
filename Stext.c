@@ -9,73 +9,54 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sys/wait.h> // Include for waitpid
 
 // Define constants for the port number and buffer size
 #define PORT 8082
 #define BUFSIZE 1024
 
-
-void receive_and_save_file(int sock, char *destination_path);
+// Function prototypes
+void handle_client(int client_sock);
+void receive_and_save_file(int sock, char *file_path);
+void handle_ufile(int client_sock, char *command);
+void handle_dfile(int client_sock, char *command);
+void handle_rmfile(int client_sock, char *command);
+void handle_dtar(int client_sock, char *command);
+void handle_display(int client_sock, char *command);
 
 // Function to handle communication with a connected client
 void handle_client(int client_sock) {
-    // Variables to store paths and filenames
-    char destination_path[1024];
-    char new_path[1024];
-    char filename[256];
+    char buffer[BUFSIZE];
     ssize_t bytes_received;
-    char *pos;
-
-    // Receive destination path
-    bytes_received = recv(client_sock, destination_path, sizeof(destination_path)-1, 0);
+    
+    // Receive the command from the client
+    bytes_received = recv(client_sock, buffer, sizeof(buffer) - 1, 0);
     if (bytes_received > 0) {
-        // Null-terminate the received destination path
-        destination_path[bytes_received] = '\0';
-        printf("Destination path received: %s\n", destination_path);
+        buffer[bytes_received] = '\0'; // Null-terminate the received command
+        printf("Command received: %s\n", buffer);
+
+        // Determine which command to process
+        if (strncmp(buffer, "ufile", 5) == 0) {
+            handle_ufile(client_sock, buffer);
+        } else if (strncmp(buffer, "dfile", 5) == 0) {
+            handle_dfile(client_sock, buffer);
+        } else if (strncmp(buffer, "rmfile", 6) == 0) {
+            handle_rmfile(client_sock, buffer);
+        } else if (strncmp(buffer, "dtar", 4) == 0) {
+            handle_dtar(client_sock, buffer);
+        } else if (strncmp(buffer, "display", 7) == 0) {
+            handle_display(client_sock, buffer);
+        } else {
+            printf("Unknown command: %s\n", buffer);
+        }
     } else {
-        // Handle the case where no data is received
         if (bytes_received == 0) {
             printf("Connection closed by peer\n");
         } else {
-            perror("Receive destination path failed");
+            perror("Receive command failed");
         }
-        close(client_sock);
-        return;
     }
 
-    // Find the position of "smain" in the original path
-    pos = strstr(destination_path, "smain");
-    if (pos != NULL) {
-        // Copy the part before "smain" into new_path
-        strncpy(new_path, destination_path, pos - destination_path);
-        // Null-terminate the string
-        new_path[pos - destination_path] = '\0'; 
-
-        // Append "stxt" to new_path
-        strcat(new_path, "stxt");
-
-        // Append the rest of the original path after "smain"
-        strcat(new_path, pos + strlen("smain"));
-    }
-    
-    printf("new path : %s\n", new_path);
-
-    // Ensure the destination directory exists
-    char *last_slash = strrchr(new_path, '/');
-    if (last_slash != NULL) {
-        // Temporarily remove the last part of the path   
-        *last_slash = '\0';
-        char command[BUFSIZE];
-        // Create the directory if it does not exist
-        snprintf(command, sizeof(command), "mkdir -p %s", new_path);
-        system(command);
-        // Restore the original path
-        *last_slash = '/';
-    }
-
-    // Save the file
-    receive_and_save_file(client_sock, new_path);
-    // Close the client socket
     close(client_sock);
 }
 
@@ -97,8 +78,94 @@ void receive_and_save_file(int sock, char *file_path) {
         write(file_fd, buffer, bytes_received);
     }
 
-    // close the file
     close(file_fd);
+}
+
+// Function to handle 'ufile' command
+// Function to handle 'ufile' command
+// Function to handle 'ufile' command
+void handle_ufile(int client_sock, char *command) {
+    char destination_path[1024];
+    char new_path[1024];
+    char filename[256];
+    char *pos;
+    
+    // Ensure command string is properly null-terminated
+    command[strcspn(command, "\r\n")] = '\0';
+
+    // Extract the filename and destination path from the command
+    // Adjust format specifier to handle possible spaces in filenames
+    int parsed = sscanf(command, "ufile %s",destination_path);
+
+    if (parsed < 1) {
+        printf("Command parsing failed\n");
+        return;
+    }
+
+    // Debug prints to ensure correct extraction
+    printf("Filename: %s\n", filename);
+    printf("Original destination path: %s\n", destination_path);
+
+    // Find the position of "smain" in the original path
+    pos = strstr(destination_path, "smain");
+    if (pos != NULL) {
+        // Copy the part before "smain" into new_path
+        size_t prefix_len = pos - destination_path;
+        strncpy(new_path, destination_path, prefix_len);
+        new_path[prefix_len] = '\0'; // Null-terminate the string
+
+        // Append "stxt" to new_path
+        strcat(new_path, "stxt");
+
+        // Append the rest of the original path after "smain"
+        strcat(new_path, pos + strlen("smain"));
+    } else {
+        // If "smain" not found, use destination_path as new_path
+        strncpy(new_path, destination_path, sizeof(new_path) - 1);
+        new_path[sizeof(new_path) - 1] = '\0'; // Ensure null-termination
+    }
+
+    printf("New path: %s\n", new_path);
+
+    // Ensure the destination directory exists
+    char *last_slash = strrchr(new_path, '/');
+    if (last_slash != NULL) {   
+        // Temporarily remove the last part of the path
+        *last_slash = '\0';
+        char command_buf[BUFSIZE];
+        // Create the directory if it does not exist
+        snprintf(command_buf, sizeof(command_buf), "mkdir -p %s", new_path);
+        if (system(command_buf) != 0) {
+            perror("Directory creation failed");
+            return;
+        }
+        // Restore the original path
+        *last_slash = '/';  
+    }
+
+    // Save the file
+    receive_and_save_file(client_sock, new_path);
+}
+
+// Placeholder functions for other commands
+void handle_dfile(int client_sock, char *command) {
+    // Placeholder for 'dfile' command
+    printf("Handling 'dfile' command: %s\n", command);
+}
+
+void handle_rmfile(int client_sock, char *command) {
+    // Placeholder for 'rmfile' command
+    printf("Handling 'rmfile' command: %s\n", command);
+}
+
+void handle_dtar(int client_sock, char *command) {
+    // Placeholder for 'dtar' command
+    printf("Handling 'dtar' command: %s\n", command);
+}
+
+void handle_display(int client_sock, char *command) {
+    // Placeholder for 'display' command
+    printf("Handling 'display' command: %s\n", command);
 }
 
 int main() {
@@ -134,7 +201,7 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    printf("Stext server is listening on port %d\n", PORT);
+    printf("Stxt server is listening on port %d\n", PORT);
 
     while (1) {
         // Accept a client connection
@@ -151,26 +218,19 @@ int main() {
         child_pid = fork();
         if (child_pid == 0) {
             // In the child process
-            // Close the server socket in the child
-            close(server_sock);  
-            // Handle communication with the client
-            handle_client(client_sock);  
-            // Close the client socket
-            close(client_sock);  
-            // Exit the child process
-            exit(0);  
+            close(server_sock);  // Close the server socket in the child
+            handle_client(client_sock);  // Handle communication with the client
+            close(client_sock);  // Close the client socket
+            exit(0);  // Exit the child process
         } else if (child_pid > 0) {
             // In the parent process
-            // Close the client socket in the parent
-            close(client_sock);  
-            // Wait for child processes to terminate
-            waitpid(-1, NULL, WNOHANG);  
+            close(client_sock);  // Close the client socket in the parent
+            waitpid(-1, NULL, WNOHANG);  // Wait for child processes to terminate
         } else {
             perror("Fork failed");
         }
     }
 
-    // Close the server socket
-    close(server_sock);  
+    close(server_sock);  // Close the server socket
     return 0;
 }

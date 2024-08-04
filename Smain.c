@@ -21,7 +21,9 @@ void handle_dfile(int client_sock, char *command);
 void handle_rmfile(int client_sock, char *command);
 void handle_dtar(int client_sock, char *command);
 void handle_display(int client_sock, char *command);
-void send_file_to_server(int server_sock, char *filename, char *destination_path);
+int connect_to_spdf();
+int connect_to_stext();
+void send_file_to_server(int server_sock, char *command, char *filename, char *destination_path);
 void receive_and_save_file(int sock, char *destination_path, char *f_name);
 
 int main() {
@@ -122,48 +124,28 @@ void prcclient(int client_sock) {
 void handle_ufile(int client_sock, char *command) {
     char filename[256], destination_path[256];
     int server_sock;
-    struct sockaddr_in server_addr;
 
     // Extract filename and destination path from the command
     sscanf(command, "ufile %s %s", filename, destination_path);
 
     if (strstr(filename, ".pdf") != NULL) {
         // Forward to Spdf server
-        server_sock = socket(AF_INET, SOCK_STREAM, 0);
+        server_sock = connect_to_spdf();
         if (server_sock < 0) {
-            perror("Spdf socket creation failed");
+            printf("Failed to connect to Spdf server\n");
             return;
         }
-        server_addr.sin_family = AF_INET;
-        server_addr.sin_port = htons(8081);  // Port for Spdf
-        server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-        if (connect(server_sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-            perror("Connect to Spdf failed");
-            close(server_sock);
-            return;
-        }
-        printf("destination_path:%s\n\n",destination_path);
-        send_file_to_server(server_sock, filename, destination_path);
+        send_file_to_server(server_sock, "ufile", filename, destination_path);
         close(server_sock);
 
     } else if (strstr(filename, ".txt") != NULL) {
         // Forward to Stext server
-        server_sock = socket(AF_INET, SOCK_STREAM, 0);
+        server_sock = connect_to_stext();
         if (server_sock < 0) {
-            perror("Stext socket creation failed");
+            printf("Failed to connect to Stext server\n");
             return;
         }
-        server_addr.sin_family = AF_INET;
-        server_addr.sin_port = htons(8082);  // Port for Stext
-        server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-        if (connect(server_sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-            perror("Connect to Stext failed");
-            close(server_sock);
-            return;
-        }
-        send_file_to_server(server_sock, filename, destination_path);
+        send_file_to_server(server_sock, "ufile", filename, destination_path);
         close(server_sock);
 
     } else if (strstr(filename, ".c") != NULL) {
@@ -204,10 +186,65 @@ void handle_display(int client_sock, char *command) {
     // Implement logic to display files
 }
 
+// Function to connect to the Spdf server
+int connect_to_spdf() {
+    int server_sock;
+    struct sockaddr_in server_addr;
+
+    // Create a socket
+    server_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_sock < 0) {
+        perror("Spdf socket creation failed");
+        return -1;
+    }
+
+    // Set up the server address
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(8081);  // Port for Spdf
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    // Connect to the Spdf server
+    if (connect(server_sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connect to Spdf failed");
+        close(server_sock);
+        return -1;
+    }
+
+    return server_sock;
+}
+
+// Function to connect to the Stext server
+int connect_to_stext() {
+    int server_sock;
+    struct sockaddr_in server_addr;
+
+    // Create a socket
+    server_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_sock < 0) {
+        perror("Stext socket creation failed");
+        return -1;
+    }
+
+    // Set up the server address
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(8082);  // Port for Stext
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    // Connect to the Stext server
+    if (connect(server_sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connect to Stext failed");
+        close(server_sock);
+        return -1;
+    }
+
+    return server_sock;
+}
+
 // Function to send a file to a specified server
-void send_file_to_server(int server_sock, char *filename, char *destination_path) {
+// Function to send a file to a specified server
+void send_file_to_server(int server_sock, char *command, char *filename, char *destination_path) {
     char buffer[BUFSIZE];
-    ssize_t bytes_sent,bytes_read;
+    ssize_t bytes_sent, bytes_read;
     int file_fd;
 
     // Replace ~ with the value of the HOME environment variable
@@ -226,18 +263,18 @@ void send_file_to_server(int server_sock, char *filename, char *destination_path
         full_path[sizeof(full_path) - 1] = '\0';
     }
     
-    printf("spdf. full path: %s\n",full_path);
-
-    // Construct the full path for the file(FilePath + file name    )
+    // Construct the full path for the file(FilePath + file name)
     char final_path[512];
     snprintf(final_path, sizeof(final_path), "%s/%s", full_path, filename);
-    printf("spdf. final path: %s\n",final_path);
+    
+    // Construct the message with the command and the full path
+    char message[BUFSIZE];
+    snprintf(message, sizeof(message), "%s %s", command, final_path);
 
-
-    // Send destination path
-    bytes_sent = send(server_sock, final_path, strlen(final_path) + 1, 0);
+    // Send the message (command and full path)
+    bytes_sent = send(server_sock, message, strlen(message) + 1, 0);
     if (bytes_sent < 0) {
-        perror("Send destination path failed");
+        perror("Send message failed");
         return;
     }
 
@@ -263,13 +300,13 @@ void receive_and_save_file(int sock, char *destination_path, char *f_name) {
     ssize_t bytes_received;
     char dir_path[256];
 
-
     // Replace ~ with the value of the HOME environment variable
     const char *home_dir = getenv("HOME");
     if (home_dir == NULL) {
         fprintf(stderr, "Failed to get HOME environment variable\n");
         return;
     }
+
     // new file path creation to replace ~
     char full_path[BUFSIZE];
     if (destination_path[0] == '~') {

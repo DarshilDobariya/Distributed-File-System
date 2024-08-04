@@ -14,74 +14,112 @@
 #define PORT 8080
 #define BUFSIZE 1024
 
+// Function prototypes
+void prcclient(int client_sock);
+void handle_ufile(int client_sock, char *command);
+void handle_dfile(int client_sock, char *command);
+void handle_rmfile(int client_sock, char *command);
+void handle_dtar(int client_sock, char *command);
+void handle_display(int client_sock, char *command);
+void send_file_to_server(int server_sock, char *filename, char *destination_path);
+void receive_and_save_file(int sock, char *destination_path, char *f_name);
+
+int main() {
+    int server_sock, client_sock;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addr_size;
+    pid_t child_pid;
+
+    // Create a socket for the server
+    server_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_sock < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Configure the server address
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    memset(server_addr.sin_zero, '\0', sizeof(server_addr.sin_zero));
+
+    // Bind the socket to the specified port
+    if (bind(server_sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Bind failed");
+        close(server_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    // Listen for incoming connections
+    if (listen(server_sock, 10) < 0) {
+        perror("Listen failed");
+        close(server_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Smain server is listening on port %d\n", PORT);
+
+    while (1) {
+        // Accept a client connection
+        addr_size = sizeof(client_addr);
+        client_sock = accept(server_sock, (struct sockaddr*)&client_addr, &addr_size);
+        if (client_sock < 0) {
+            perror("Accept failed");
+            continue;
+        }
+
+        printf("Connection accepted from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+
+        // Fork a child process to handle the client
+        child_pid = fork();
+        if (child_pid == 0) {
+            // In the child process
+            close(server_sock);  // Close the server socket in the child
+            prcclient(client_sock);  // Handle communication with the client
+            close(client_sock);  // Close the client socket
+            exit(0);  // Exit the child process
+        } else if (child_pid > 0) {
+            // In the parent process
+            close(client_sock);  // Close the client socket in the parent
+            waitpid(-1, NULL, WNOHANG);  // Wait for child processes to terminate
+        } else {
+            perror("Fork failed");
+        }
+    }
+
+    close(server_sock);  // Close the server socket
+    return 0;
+}
+
 // Function to handle communication with a connected client
 void prcclient(int client_sock) {
     char buffer[BUFSIZE];
     int bytes_read;
-    int spdf_sock, stext_sock;
-    struct sockaddr_in spdf_addr, stext_addr;
-
-    // Create socket for Spdf
-    spdf_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (spdf_sock < 0) {
-        perror("Spdf socket creation failed");
-        exit(EXIT_FAILURE);
-    }
-
-    // Create socket for Stext
-    stext_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (stext_sock < 0) {
-        perror("Stext socket creation failed");
-        exit(EXIT_FAILURE);
-    }
-
-    // Configure the Spdf server address
-    spdf_addr.sin_family = AF_INET;
-    spdf_addr.sin_port = htons(8081);  // Port for Spdf
-    spdf_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-    // Configure the Stext server address
-    stext_addr.sin_family = AF_INET;
-    stext_addr.sin_port = htons(8082);  // Port for Stext
-    stext_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-    // Connect to Spdf server
-    if (connect(spdf_sock, (struct sockaddr*)&spdf_addr, sizeof(spdf_addr)) < 0) {
-        perror("Connect to Spdf failed");
-        close(spdf_sock);
-        exit(EXIT_FAILURE);
-    }
-
-    // Connect to Stext server
-    if (connect(stext_sock, (struct sockaddr*)&stext_addr, sizeof(stext_addr)) < 0) {
-        perror("Connect to Stext failed");
-        close(stext_sock);
-        exit(EXIT_FAILURE);
-    }
 
     // Read messages from the client
     while ((bytes_read = recv(client_sock, buffer, BUFSIZE, 0)) > 0) {
-        // Null-terminate the received string
-        buffer[bytes_read] = '\0';  
-        // Print the received command
-        printf("Received command: %s\n", buffer);  
+        buffer[bytes_read] = '\0';  // Null-terminate the received string
+        printf("Received command: %s\n", buffer);  // Print the received command
 
+        // Determine which command to process
         if (strncmp(buffer, "ufile", 5) == 0) {
-            handle_file_transfer(client_sock, buffer);
+            handle_ufile(client_sock, buffer);
+        } else if (strncmp(buffer, "dfile", 5) == 0) {
+            handle_dfile(client_sock, buffer);
+        } else if (strncmp(buffer, "rmfile", 6) == 0) {
+            handle_rmfile(client_sock, buffer);
+        } else if (strncmp(buffer, "dtar", 4) == 0) {
+            handle_dtar(client_sock, buffer);
+        } else if (strncmp(buffer, "display", 7) == 0) {
+            handle_display(client_sock, buffer);
         } else {
             printf("Unknown command: %s\n", buffer);
         }
     }
-
-    // Close the Spdf socket
-    close(spdf_sock);  
-    // Close the Stext socket
-    close(stext_sock);  
 }
 
-
-// Function to handle file transfer commands
-void handle_file_transfer(int client_sock, char *command) {
+// Function to handle 'ufile' command
+void handle_ufile(int client_sock, char *command) {
     char filename[256], destination_path[256];
     int server_sock;
     struct sockaddr_in server_addr;
@@ -136,10 +174,40 @@ void handle_file_transfer(int client_sock, char *command) {
     }
 }
 
+// Function to handle 'dfile' command
+void handle_dfile(int client_sock, char *command) {
+    char filename[256];
+    sscanf(command, "dfile %s", filename);
+    printf("Downloading file: %s\n", filename);
+    // Implement logic to download file
+}
+
+// Function to handle 'rmfile' command
+void handle_rmfile(int client_sock, char *command) {
+    char filename[256];
+    sscanf(command, "rmfile %s", filename);
+    printf("Removing file: %s\n", filename);
+    // Implement logic to remove file
+}
+
+// Function to handle 'dtar' command
+void handle_dtar(int client_sock, char *command) {
+    char filename[256];
+    sscanf(command, "dtar %s", filename);
+    printf("Creating tarball: %s\n", filename);
+    // Implement logic to create tarball
+}
+
+// Function to handle 'display' command
+void handle_display(int client_sock, char *command) {
+    printf("Displaying files\n");
+    // Implement logic to display files
+}
+
 // Function to send a file to a specified server
 void send_file_to_server(int server_sock, char *filename, char *destination_path) {
     char buffer[BUFSIZE];
-    ssize_t bytes_sent,bytes_read   ;
+    ssize_t bytes_sent,bytes_read;
     int file_fd;
 
     // Replace ~ with the value of the HOME environment variable
@@ -239,79 +307,4 @@ void receive_and_save_file(int sock, char *destination_path, char *f_name) {
     }
 
     close(file_fd);
-}
-
-
-int main() {
-    int server_sock, client_sock;
-    struct sockaddr_in server_addr, client_addr;
-    socklen_t addr_size;
-    pid_t child_pid;
-
-    // Create a socket for the server
-    server_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_sock < 0) {
-        perror("Socket creation failed");
-        exit(EXIT_FAILURE);
-    }
-
-    // Configure the server address
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    memset(server_addr.sin_zero, '\0', sizeof(server_addr.sin_zero));
-
-    // Bind the socket to the specified port
-    if (bind(server_sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Bind failed");
-        close(server_sock);
-        exit(EXIT_FAILURE);
-    }
-
-    // Listen for incoming connections
-    if (listen(server_sock, 10) < 0) {
-        perror("Listen failed");
-        close(server_sock);
-        exit(EXIT_FAILURE);
-    }
-
-    printf("Smain server is listening on port %d\n", PORT);
-
-    while (1) {
-        // Accept a client connection
-        addr_size = sizeof(client_addr);
-        client_sock = accept(server_sock, (struct sockaddr*)&client_addr, &addr_size);
-        if (client_sock < 0) {
-            perror("Accept failed");
-            continue;
-        }
-
-        printf("Connection accepted from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
-
-        // Fork a child process to handle the client
-        child_pid = fork();
-        if (child_pid == 0) {
-            // In the child process
-            // Close the server socket in the child
-            close(server_sock);  
-            // Handle communication with the client
-            prcclient(client_sock);  
-            // Close the client socket
-            close(client_sock);  
-            // Exit the child process
-            exit(0);  
-        } else if (child_pid > 0) {
-            // In the parent process
-            // Close the client socket in the parent
-            close(client_sock);  
-            // Wait for child processes to terminate
-            waitpid(-1, NULL, WNOHANG);  
-        } else {
-            perror("Fork failed");
-        }
-    }
-
-    // Close the server socket
-    close(server_sock);  
-    return 0;
 }

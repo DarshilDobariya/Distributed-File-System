@@ -13,6 +13,7 @@
 #define PORT 8080
 #define BUFSIZE 1024
 #define MAX_TOKENS 10
+#define CMD_END_MARKER "END_CMD" // Marker to indicate the end of the command
 
 // Function prototypes
 int is_valid_extension(const char *filename);
@@ -57,6 +58,7 @@ int main() {
         // Read the user's input
         fgets(buffer, sizeof(buffer), stdin);
         // Process the user's input
+        printf("\nbuffer:%s", buffer);
         process_command(client_sock, buffer);
     }
 
@@ -73,28 +75,47 @@ int is_valid_extension(const char *filename) {
     return strcmp(ext, ".c") == 0 || strcmp(ext, ".pdf") == 0 || strcmp(ext, ".txt") == 0;
 }
 
-// Function to send a file to the server
+// Function to send a file to the server along with the command
 void send_file(int sock, char *filename, char *destination_path) {
     char buffer[BUFSIZE];
     int file_fd;
     ssize_t bytes_read;
+    size_t total_size;
 
-    // Send the command with the filename and destination path to the server
-    snprintf(buffer, sizeof(buffer), "ufile %s %s", filename, destination_path);
-    send(sock, buffer, strlen(buffer) + 1, 0);
+    // Open the file
+    file_fd = open(filename, O_RDONLY);
+    if (file_fd < 0) {
+        perror("File open failed");
+        return;
+    }
 
-    // // Open the file
-    // file_fd = open(filename, O_RDONLY);
-    // if (file_fd < 0) {
-    //     perror("File open failed");
-    //     return;
-    // }
+    // Determine the file size
+    total_size = lseek(file_fd, 0, SEEK_END);
+    lseek(file_fd, 0, SEEK_SET);
 
-    // // Read the file and send its content to the server
-    // while ((bytes_read = read(file_fd, buffer, BUFSIZE)) > 0) {
-    //     send(sock, buffer, bytes_read, 0);
-    // }
+    // Allocate memory for the entire message
+    char *message = malloc(total_size + BUFSIZE + strlen(CMD_END_MARKER) + 1);
+    if (message == NULL) {
+        perror("Memory allocation failed");
+        close(file_fd);
+        return;
+    }
 
+    // Build the command string
+    snprintf(message, total_size + BUFSIZE + strlen(CMD_END_MARKER) + 1, "ufile %s %s %s", filename, destination_path, CMD_END_MARKER);
+
+    // Append the file content
+    ssize_t message_len = strlen(message);
+    while ((bytes_read = read(file_fd, buffer, BUFSIZE)) > 0) {
+        memcpy(message + message_len, buffer, bytes_read);
+        message_len += bytes_read;
+    }
+
+    // Send the entire message to the server
+    send(sock, message, message_len, 0);
+
+    // Clean up
+    free(message);
     close(file_fd);
 }
 
@@ -167,12 +188,44 @@ void handle_dfile(int sock, char *tokens[]) {
 
 // Handle rmfile command
 void handle_rmfile(int sock, char *tokens[]) {
+    char buffer[BUFSIZE];
+
     if (!tokens[1]) {
         printf("Error: Missing filename for rmfile.\n");
         return;
     }
     printf("rmfile command received for %s\n", tokens[1]);
-    // Implement rmfile logic here
+    char *file_path = tokens[1];
+
+    // check path
+    char *token_path = tokens[1];
+    if (strncmp(token_path, "~/smain/", 8) != 0) {
+        printf("Error: Path must start with '~/smain/'\n");
+        return;
+    }
+
+    // Make a copy of file_path for tokenization
+    char file_path_copy[BUFSIZE];
+    strncpy(file_path_copy, file_path, BUFSIZE - 1);
+    file_path_copy[BUFSIZE - 1] = '\0';
+
+    // Tokenize the file path to get the file name
+    char *last_token = NULL;
+    char *token = strtok(file_path_copy, "/");
+    while (token != NULL) {
+        last_token = token;
+        token = strtok(NULL, "/");
+    }
+    // check extension is valid or not
+    if (last_token == NULL || !is_valid_extension(last_token)) {
+        printf("Error: Invalid file extension.\n");
+        return;
+    }
+
+    printf("file_path: %s\n", file_path);
+    // Send the rmfile command to the server
+    snprintf(buffer, sizeof(buffer), "rmfile %s", file_path);
+    send(sock, buffer, strlen(buffer) + 1, 0);
 }
 
 // Handle dtar command

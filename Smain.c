@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sys/wait.h>
 
 #define PORT 8080
 #define BUFSIZE 1024
@@ -22,8 +23,10 @@ void handle_dtar(int client_sock, char *command);
 void handle_display(int client_sock, char *command);
 int connect_to_spdf();
 int connect_to_stext();
-void send_file_to_server(int server_sock, char *command, char *filename, char *destination_path, char *file_data);
-void receive_and_save_file(int sock, char *destination_path, char *f_name, char *file_data);
+void send_file_to_server(int server_sock, int client_sock, char *command, char *filename, char *destination_path, char *file_data);
+int receive_and_save_file(int sock, char *destination_path, char *f_name, char *file_data);
+void remove_file_from_server(int sock, int client_sock, char *command, char *destination_path);
+int delete_file(const char *file_path);
 
 int main() {
     int server_sock, client_sock;
@@ -131,17 +134,23 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
     char filename[256], destination_path[256];
     int server_sock;
 
-    // Extract filename and destination path from the command
-    sscanf(command, "ufile %s %s", filename, destination_path);
+
+    /// Extract filename and destination path from the command
+    if (sscanf(command, "ufile %s %s", filename, destination_path) != 2) {
+        printf("Command parsing failed\n");
+        send(client_sock, "File upload failed", 18, 0);
+        return;
+    }
 
     if (strstr(filename, ".pdf") != NULL) {
         // Forward to Spdf server
         server_sock = connect_to_spdf();
         if (server_sock < 0) {
             printf("Failed to connect to Spdf server\n");
+            send(client_sock, "File upload failed", 18, 0);
             return;
         }
-        send_file_to_server(server_sock, "ufile", filename, destination_path, file_data);
+        send_file_to_server(server_sock, client_sock, "ufile", filename, destination_path, file_data);
         close(server_sock);
 
     } else if (strstr(filename, ".txt") != NULL) {
@@ -149,16 +158,24 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
         server_sock = connect_to_stext();
         if (server_sock < 0) {
             printf("Failed to connect to Stext server\n");
+            send(client_sock, "File upload failed", 18, 0);
             return;
         }
-        send_file_to_server(server_sock, "ufile", filename, destination_path, file_data);
+        send_file_to_server(server_sock, client_sock, "ufile", filename, destination_path, file_data);
         close(server_sock);
 
     } else if (strstr(filename, ".c") != NULL) {
         // Save locally
-        receive_and_save_file(client_sock, destination_path, filename, file_data);
+        if (receive_and_save_file(client_sock, destination_path, filename, file_data) == 0) {
+            const char *success_message = "File Uploaded successfully.";
+            send(client_sock, success_message, strlen(success_message), 0);
+        } else {
+            const char *failed_message = "File uploading failed!";
+            send(client_sock, failed_message, strlen(failed_message), 0);
+        }
     } else {
         printf("Unsupported file type: %s\n", filename);
+        send(client_sock, "Unsupported file type", 21, 0);
     }
 }
 
@@ -167,7 +184,6 @@ void handle_dfile(int client_sock, char *command) {
     char file_path[256];
     sscanf(command, "dfile %s", file_path);
     printf("Downloading file: %s\n", file_path);
-    
 
     const char *home_dir = getenv("HOME");
     if (home_dir == NULL) {
@@ -213,6 +229,7 @@ void handle_dfile(int client_sock, char *command) {
         printf("Invalid file name\n");
     }
 }
+
 void send_file_to_client(int server_sock, const char *file_path) {
     int fd;
     ssize_t bytes_sent;
@@ -313,9 +330,10 @@ void handle_rmfile(int client_sock, char *command) {
         server_sock = connect_to_spdf();
         if (server_sock < 0) {
             printf("Failed to connect to Spdf server\n");
+            send(client_sock, "File remove failed", 18, 0);
             return;
         }
-        remove_file_from_server(server_sock, "rmfile", file_path);
+        remove_file_from_server(server_sock, client_sock, "rmfile", file_path);
         close(server_sock);
 
     } else if (strstr(file_name, ".txt") != NULL) {
@@ -323,15 +341,19 @@ void handle_rmfile(int client_sock, char *command) {
         server_sock = connect_to_stext();
         if (server_sock < 0) {
             printf("Failed to connect to Stext server\n");
+            send(client_sock, "File remove failed", 18, 0);
             return;
         }
-        remove_file_from_server(server_sock, "rmfile", file_path);
+        remove_file_from_server(server_sock, client_sock, "rmfile", file_path);
         close(server_sock);
 
     } else if (strstr(file_name, ".c") != NULL) {
         // Delete the .c file
-        if (delete_file(file_path) != 0) {
+        if (delete_file(file_path) == 0) {
             printf("Error deleting file: %s\n", file_path);
+            send(client_sock, "File has been removed", 21, 0);
+        }else{
+            send(client_sock, "File remove failed", 18, 0);
         }
 
     } else {
@@ -407,11 +429,13 @@ int connect_to_stext() {
     return server_sock;
 }
 
+
 // Function to send a file to a specified server
 // Function to send a file to a specified server
-void send_file_to_server(int server_sock, char *command, char *filename, char *destination_path, char *file_data) {
+void send_file_to_server(int server_sock, int client_sock, char *command, char *filename, char *destination_path, char *file_data) {
     char buffer[BUFSIZE];
     ssize_t bytes_sent;
+    char recv_buffer[BUFSIZE];
 
     // Replace ~ with the value of the HOME environment variable
     const char *home_dir = getenv("HOME");
@@ -452,13 +476,28 @@ void send_file_to_server(int server_sock, char *command, char *filename, char *d
         perror("Send failed");
     }
 
+    // Receive and display the confirmation message
+    ssize_t bytes_received = recv(server_sock, recv_buffer, sizeof(recv_buffer) - 1, 0);
+    if (bytes_received > 0) {
+        recv_buffer[bytes_received] = '\0';
+        // Forward the server response to the client
+        if (send(client_sock, recv_buffer, bytes_received, 0) < 0) {
+            perror("Send to client failed");
+        }
+    } else if (bytes_received == 0) {
+        printf("Connection closed by server.\n");
+        exit(EXIT_SUCCESS);
+    } else {
+        perror("Error receiving data");
+    }
+
     // Free allocated memory
     free(complete_message);
 }
 
 
 // Function to receive a file from a client and save it to the specified destination
-void receive_and_save_file(int sock, char *destination_path, char *f_name, char *file_data) {
+int receive_and_save_file(int sock, char *destination_path, char *f_name, char *file_data) {
     char buffer[BUFSIZE];
     int file_fd;
     ssize_t bytes_received;
@@ -468,7 +507,7 @@ void receive_and_save_file(int sock, char *destination_path, char *f_name, char 
     const char *home_dir = getenv("HOME");
     if (home_dir == NULL) {
         fprintf(stderr, "Failed to get HOME environment variable\n");
-        return;
+        return -1;
     }
  
     // Create the full path for the file
@@ -499,7 +538,7 @@ void receive_and_save_file(int sock, char *destination_path, char *f_name, char 
     file_fd = open(final_path, O_CREAT | O_RDWR | O_TRUNC, 0777);
     if (file_fd < 0) {
         perror("File creation failed");
-        return;
+        return -1;
     }
  
     // Write the received file data
@@ -508,12 +547,14 @@ void receive_and_save_file(int sock, char *destination_path, char *f_name, char 
     }
  
     close(file_fd);
+    return 0;
 }
 
 
 // Function to remove requested file by client from servers
-void remove_file_from_server(int sock, char *command, char *destination_path){
-    printf("IN FUNCTION\n\n");
+void remove_file_from_server(int sock, int client_sock, char *command, char *destination_path){
+
+    char recv_buffer[BUFSIZE];
 
      // Replace ~ with the value of the HOME environment variable
     const char *home_dir = getenv("HOME");
@@ -539,11 +580,25 @@ void remove_file_from_server(int sock, char *command, char *destination_path){
         return;
     }
     printf("Message sent: %s\n", message);
+
+    // Receive and display the confirmation message
+    ssize_t bytes_received = recv(sock, recv_buffer, sizeof(recv_buffer) - 1, 0);
+    if (bytes_received > 0) {
+        recv_buffer[bytes_received] = '\0';
+        // Forward the server response to the client
+        if (send(client_sock, recv_buffer, bytes_received, 0) < 0) {
+            perror("Send to client failed");
+        }
+    } else if (bytes_received == 0) {
+        printf("Connection closed by server.\n");
+        exit(EXIT_SUCCESS);
+    } else {
+        perror("Error receiving data");
+    }
 }
 
 // Function to delete a file and handle errors
 int delete_file(const char *file_path) {
-
     // Replace ~ with the value of the HOME environment variable
     const char *home_dir = getenv("HOME");
     if (home_dir == NULL) {

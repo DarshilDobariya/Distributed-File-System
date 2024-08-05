@@ -18,8 +18,9 @@
 // Function prototypes
 void handle_client(int client_sock);
 void receive_and_save_file(int sock, char *file_path);
+char* create_pdf_path(const char *destination_path);
+int delete_file(const char *file_path);
 void handle_ufile(int client_sock, char *command, char *file_data);
-
 void handle_dfile(int client_sock, char *command);
 void handle_rmfile(int client_sock, char *command);
 void handle_dtar(int client_sock, char *command);
@@ -37,21 +38,18 @@ void handle_client(int client_sock) {
         buffer[bytes_received] = '\0'; // Null-terminate the received data
         printf("Combined message received: %s\n", buffer);
 
-        // Find the newline that separates the command/path from the file data
-        char *delimiter = strstr(buffer, "\n");
-        if (delimiter == NULL) {
-            printf("Invalid message format\n");
-            return;
-        }
-        
-        // Null-terminate the command
-        *delimiter = '\0';
-
-        // Extract the file data
-        file_data = delimiter + 1;
-
         // Determine which command to process
         if (strncmp(buffer, "ufile", 5) == 0) {
+            // Find the newline that separates the command/path from the file data
+            char *delimiter = strstr(buffer, "\n");
+            if (delimiter == NULL) {
+                printf("Invalid message format\n");
+                return;
+            }
+            // Null-terminate the command
+            *delimiter = '\0';
+            // Extract the file data
+            file_data = delimiter + 1;
             handle_ufile(client_sock, buffer, file_data);
         } else if (strncmp(buffer, "dfile", 5) == 0) {
             handle_dfile(client_sock, buffer);
@@ -71,9 +69,9 @@ void handle_client(int client_sock) {
             perror("Receive command failed");
         }
     }
-
     close(client_sock);
 }
+
 void handle_ufile(int client_sock, char *command, char *file_data) {
     char destination_path[1024];
     char new_path[1024];
@@ -89,57 +87,41 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
         return;
     }
 
-    // Find the position of "smain" in the original path
-    pos = strstr(destination_path, "smain");
-    if (pos != NULL) {
-        // Copy the part before "smain" into new_path
-        size_t prefix_len = pos - destination_path;
-        strncpy(new_path, destination_path, prefix_len);
-        new_path[prefix_len] = '\0'; // Null-terminate the string
+    char *new_file_path = create_pdf_path(destination_path);
+    if (new_file_path != NULL) {
+        // Ensure the destination directory exists
+        char *last_slash = strrchr(new_file_path, '/');
+        if (last_slash != NULL) {   
+            // Temporarily remove the last part of the path
+            *last_slash = '\0';
+            char command_buf[BUFSIZE];
+            // Create the directory if it does not exist
+            snprintf(command_buf, sizeof(command_buf), "mkdir -p %s", new_file_path);
+            if (system(command_buf) != 0) {
+                perror("Directory creation failed");
+                return;
+            }
+            // Restore the original path
+            *last_slash = '/';  
+        }
 
-        // Append "spdf" to new_path
-        strcat(new_path, "spdf");
-
-        // Append the rest of the original path after "smain"
-        strcat(new_path, pos + strlen("smain"));
-    } else {
-        // If "smain" not found, use destination_path as new_path
-        strncpy(new_path, destination_path, sizeof(new_path) - 1);
-        new_path[sizeof(new_path) - 1] = '\0'; // Ensure null-termination
-    }
-
-    printf("New path: %s\n", new_path);
-
-    // Ensure the destination directory exists
-    char *last_slash = strrchr(new_path, '/');
-    if (last_slash != NULL) {   
-        // Temporarily remove the last part of the path
-        *last_slash = '\0';
-        char command_buf[BUFSIZE];
-        // Create the directory if it does not exist
-        snprintf(command_buf, sizeof(command_buf), "mkdir -p %s", new_path);
-        if (system(command_buf) != 0) {
-            perror("Directory creation failed");
+        // Create the file for writing
+        file_fd = open(new_file_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if (file_fd < 0) {
+            perror("File creation failed");
             return;
         }
-        // Restore the original path
-        *last_slash = '/';  
+
+        // Write the file data to the file
+        ssize_t file_data_len = strlen(file_data);
+        if (write(file_fd, file_data, file_data_len) < 0) {
+            perror("File write failed");
+        }
+
+        close(file_fd);
+
     }
 
-    // Create the file for writing
-    file_fd = open(new_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (file_fd < 0) {
-        perror("File creation failed");
-        return;
-    }
-
-    // Write the file data to the file
-    ssize_t file_data_len = strlen(file_data);
-    if (write(file_fd, file_data, file_data_len) < 0) {
-        perror("File write failed");
-    }
-
-    close(file_fd);
 }
 
 
@@ -189,6 +171,28 @@ void handle_dfile(int client_sock, char *command) {
 void handle_rmfile(int client_sock, char *command) {
     // Placeholder for 'rmfile' command
     printf("Handling 'rmfile' command: %s\n", command);
+
+    char file_path[1024];
+    char buffer[BUFSIZE];
+    int file_fd;
+    ssize_t bytes_read;
+
+    // Ensure command string is properly null-terminated
+    command[strcspn(command, "\r\n")] = '\0';
+
+    // Extract the file path from the command
+    if (sscanf(command, "rmfile %s", file_path) != 1) {
+        printf("Command parsing failed\n");
+        return;
+    }
+
+    // Debug prints to ensure correct extraction
+    printf("File requested for remove: %s\n", file_path);
+    if (delete_file(file_path) != 0) {
+            printf("Error deleting file: %s\n", file_path);
+    }else{
+        printf("Succesful deletion...\n");
+    }
 }
 
 void handle_dtar(int client_sock, char *command) {
@@ -199,6 +203,83 @@ void handle_dtar(int client_sock, char *command) {
 void handle_display(int client_sock, char *command) {
     // Placeholder for 'display' command
     printf("Handling 'display' command: %s\n", command);
+}
+
+
+// Function to delete a file and handle errors
+int delete_file(const char *file_path) {
+    // Replace ~ with the value of the HOME environment variable
+    const char *home_dir = getenv("HOME");
+    if (home_dir == NULL) {
+        fprintf(stderr, "Failed to get HOME environment variable\n");
+        return;
+    }
+
+    // new file path creation to replace ~
+    char full_path[BUFSIZE];
+    if (file_path[0] == '~') {
+        snprintf(full_path, sizeof(full_path), "%s%s", home_dir, file_path + 1);
+    } else {
+        strncpy(full_path, file_path, sizeof(full_path) - 1);
+        full_path[sizeof(full_path) - 1] = '\0';
+    }
+
+    // change smain to spdf
+    char *pdf_path = create_pdf_path(full_path);
+    if (pdf_path != NULL) {
+        if (unlink(pdf_path) == 0) {
+            printf("Successfully deleted file: %s\n", full_path);
+            return 0;
+        } else {
+            // Handle error
+            switch (errno) {
+                case EACCES:
+                    fprintf(stderr, "Permission denied: %s\n", full_path);
+                    break;
+                case ENOENT:
+                    fprintf(stderr, "File does not exist: %s\n", full_path);
+                    break;
+                case EISDIR:
+                    fprintf(stderr, "Path is a directory, not a file: %s\n", full_path);
+                    break;
+                default:
+                    fprintf(stderr, "Failed to delete file %s: %s\n", full_path, strerror(errno));
+            }
+            return -1;
+        }
+        free(pdf_path); // Remember to free the allocated memory
+    }
+}
+
+char* create_pdf_path(const char *destination_path) {
+    char *pos;
+    size_t new_path_size = strlen(destination_path); 
+    char *new_path = malloc(new_path_size);
+
+    if (new_path == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return NULL;
+    }
+
+    // Find the position of "smain" in the original path
+    pos = strstr(destination_path, "smain");
+    if (pos != NULL) {
+        // Copy the part before "smain" into new_path
+        size_t prefix_len = pos - destination_path;
+        strncpy(new_path, destination_path, prefix_len);
+        new_path[prefix_len] = '\0'; // Null-terminate the string
+
+        // Append "spdf" to new_path
+        strcat(new_path, "spdf");
+
+        // Append the rest of the original path after "smain"
+        strcat(new_path, pos + strlen("smain"));
+    } else {
+        // If "smain" not found, use destination_path as new_path
+        strcpy(new_path, destination_path);
+    }
+
+    return new_path;
 }
 
 int main() {

@@ -58,7 +58,6 @@ int main() {
         // Read the user's input
         fgets(buffer, sizeof(buffer), stdin);
         // Process the user's input
-        printf("\nbuffer:%s", buffer);
         process_command(client_sock, buffer);
     }
 
@@ -150,10 +149,14 @@ void process_command(int sock, char *input) {
     } else {
         printf("Invalid command\n");
     }
+
+    
 }
 
 // Handle ufile command
 void handle_ufile(int sock, char *tokens[]) {
+    char buffer[BUFSIZE];
+
     if (!tokens[1] || !tokens[2]) {
         printf("Error: Missing filename or destination path.\n");
         return;
@@ -165,15 +168,28 @@ void handle_ufile(int sock, char *tokens[]) {
         printf("Error: Invalid file extension.\n");
         return;
     }
-    if (access(filename, F_OK) == -1) {
+    else if (access(filename, F_OK) == -1) {
         printf("Error: File does not exist.\n");
         return;
     }
-    if (strncmp(destination_path, "~/smain/", 8) != 0) {
+    else if (strncmp(destination_path, "~/smain/", 8) != 0) {
         printf("Error: Destination path must start with '~/smain/'\n");
         return;
+    }else{
+        send_file(sock, filename, destination_path);
+
+        // Receive and display the confirmation message
+        ssize_t bytes_received = recv(sock, buffer, sizeof(buffer) - 1, 0);
+        if (bytes_received > 0) {
+            buffer[bytes_received] = '\0';
+            printf("Server: %s\n", buffer);
+        } else if (bytes_received == 0) {
+            printf("Connection closed by server.\n");
+            exit(EXIT_SUCCESS);
+        } else {
+            perror("Error receiving data");
+        }
     }
-    send_file(sock, filename, destination_path);
 }
 
 // Handle dfile command
@@ -188,13 +204,14 @@ void handle_dfile(int sock, char *tokens[]) {
 
 // Handle rmfile command
 void handle_rmfile(int sock, char *tokens[]) {
+    char recv_buffer[BUFSIZE];
     char buffer[BUFSIZE];
 
     if (!tokens[1]) {
         printf("Error: Missing filename for rmfile.\n");
         return;
     }
-    printf("rmfile command received for %s\n", tokens[1]);
+
     char *file_path = tokens[1];
 
     // check path
@@ -222,10 +239,21 @@ void handle_rmfile(int sock, char *tokens[]) {
         return;
     }
 
-    printf("file_path: %s\n", file_path);
     // Send the rmfile command to the server
     snprintf(buffer, sizeof(buffer), "rmfile %s", file_path);
     send(sock, buffer, strlen(buffer) + 1, 0);
+
+    // Receive and display the confirmation message
+    ssize_t bytes_received = recv(sock, recv_buffer, sizeof(recv_buffer) - 1, 0);
+    if (bytes_received > 0) {
+        recv_buffer[bytes_received] = '\0';
+        printf("Server: %s\n", recv_buffer);
+    } else if (bytes_received == 0) {
+        printf("Connection closed by server.\n");
+        exit(EXIT_SUCCESS);
+    } else {
+        perror("Error receiving data");
+    }
 }
 
 // Handle dtar command

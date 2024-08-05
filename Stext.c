@@ -18,7 +18,7 @@
 // Function prototypes
 void handle_client(int client_sock);
 void receive_and_save_file(int sock, char *file_path);
-char* create_pdf_path(const char *destination_path);
+char* create_txt_path(const char *destination_path);
 int delete_file(const char *file_path);
 void handle_ufile(int client_sock, char *command, char *file_data);
 void handle_dfile(int client_sock, char *command);
@@ -75,9 +75,6 @@ void handle_client(int client_sock) {
 }
 void handle_ufile(int client_sock, char *command, char *file_data) {
     char destination_path[1024];
-    char new_path[1024];
-    char *filename;
-    char *pos;
     int file_fd;
 
     // Extract the destination path from the command
@@ -85,60 +82,60 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
 
     if (parsed < 1) {
         printf("Command parsing failed\n");
+        send(client_sock, "File upload failed", 18, 0);
         return;
     }
 
-    // Find the position of "smain" in the original path
-    pos = strstr(destination_path, "smain");
-    if (pos != NULL) {
-        // Copy the part before "smain" into new_path
-        size_t prefix_len = pos - destination_path;
-        strncpy(new_path, destination_path, prefix_len);
-        new_path[prefix_len] = '\0'; // Null-terminate the string
+    char *new_file_path = create_txt_path(destination_path);
+    if (new_file_path != NULL) {
+        // Ensure the destination directory exists
+        char *last_slash = strrchr(new_file_path, '/');
+        if (last_slash != NULL) {   
+            // Temporarily remove the last part of the path
+            *last_slash = '\0';
+            char command_buf[BUFSIZE];
+            // Create the directory if it does not exist
+            snprintf(command_buf, sizeof(command_buf), "mkdir -p %s", new_file_path);
+            if (system(command_buf) != 0) {
+                perror("Directory creation failed");
+                send(client_sock, "File upload failed", 18, 0);
+                free(new_file_path);
+                return;
+            }
+            // Restore the original path
+            *last_slash = '/';  
+        }
 
-        // Append "stext" to new_path
-        strcat(new_path, "stext");
-
-        // Append the rest of the original path after "smain"
-        strcat(new_path, pos + strlen("smain"));
-    } else {
-        // If "smain" not found, use destination_path as new_path
-        strncpy(new_path, destination_path, sizeof(new_path) - 1);
-        new_path[sizeof(new_path) - 1] = '\0'; // Ensure null-termination
-    }
-
-    printf("New path: %s\n", new_path);
-
-    // Ensure the destination directory exists
-    char *last_slash = strrchr(new_path, '/');
-    if (last_slash != NULL) {   
-        // Temporarily remove the last part of the path
-        *last_slash = '\0';
-        char command_buf[BUFSIZE];
-        // Create the directory if it does not exist
-        snprintf(command_buf, sizeof(command_buf), "mkdir -p %s", new_path);
-        if (system(command_buf) != 0) {
-            perror("Directory creation failed");
+        // Create the file for writing
+        file_fd = open(new_file_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if (file_fd < 0) {
+            perror("File creation failed");
+            send(client_sock, "File upload failed", 18, 0);
+            close(file_fd);
+            free(new_file_path);
             return;
         }
-        // Restore the original path
-        *last_slash = '/';  
-    }
 
-    // Create the file for writing
-    file_fd = open(new_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (file_fd < 0) {
-        perror("File creation failed");
-        return;
-    }
+        // Write the file data to the file
+        ssize_t file_data_len = strlen(file_data);
+        if (write(file_fd, file_data, file_data_len) < 0) {
+            perror("File write failed");
+            send(client_sock, "File upload failed", 18, 0);
+            close(file_fd);
+            free(new_file_path);
+        }
 
-    // Write the file data to the file
-    ssize_t file_data_len = strlen(file_data);
-    if (write(file_fd, file_data, file_data_len) < 0) {
-        perror("File write failed");
-    }
+        close(file_fd);
 
-    close(file_fd);
+        // Send confirmation to the client
+        const char *success_message = "File Uploaded successfully.";
+        send(client_sock, success_message, strlen(success_message), 0);
+
+        free(new_file_path);
+    }else{
+        const char *failed_message = "File uploading failed!";
+        send(client_sock, failed_message, strlen(failed_message), 0);
+    }
 }
 
 
@@ -202,14 +199,36 @@ void handle_rmfile(int client_sock, char *command) {
         printf("Command parsing failed\n");
         return;
     }
+    printf("file_path: .%s.",file_path);
+    char *new_file_path = create_txt_path(file_path);
+    if (new_file_path != NULL){
+        // check if file exist or not
+        if (access(new_file_path, F_OK) == -1) {
+            // Send rejction to the client
+            const char *success_message = "File not found!";
+            send(client_sock, success_message, strlen(success_message), 0);
+            return;
+        }
 
-    // Debug prints to ensure correct extraction
-    printf("File requested for remove: %s\n", file_path);
-    if (delete_file(file_path) != 0) {
-            printf("Error deleting file: %s\n", file_path);
+        //if exist then delete
+        if (delete_file(new_file_path) != 0) {
+            // Send rejction to the client
+            const char *success_message = "File remove Failed!";
+            send(client_sock, success_message, strlen(success_message), 0);
+        }else{
+            // Send confirmation to the client
+            const char *success_message = "File has been removed.";
+            send(client_sock, success_message, strlen(success_message), 0);
+        }
     }else{
-        printf("Succesful deletion...\n");
+        // Send rejction to the client
+        const char *success_message = "File remove Failed!";
+        send(client_sock, success_message, strlen(success_message), 0);
     }
+
+
+
+
 }
 
 void handle_dtar(int client_sock, char *command) {
@@ -241,7 +260,7 @@ int delete_file(const char *file_path) {
     }
 
     // change smain to spdf
-    char *txt_path = create_pdf_path(full_path);
+    char *txt_path = create_txt_path(full_path);
     if (txt_path != NULL) {
         if (unlink(txt_path) == 0) {
             printf("Successfully deleted file: %s\n", full_path);
@@ -267,7 +286,7 @@ int delete_file(const char *file_path) {
     }
 }
 
-char* create_pdf_path(const char *destination_path) {
+char* create_txt_path(const char *destination_path) {
     char *pos;
     size_t new_path_size = strlen(destination_path); 
     char *new_path = malloc(new_path_size);

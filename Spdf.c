@@ -74,9 +74,6 @@ void handle_client(int client_sock) {
 
 void handle_ufile(int client_sock, char *command, char *file_data) {
     char destination_path[1024];
-    char new_path[1024];
-    char *filename;
-    char *pos;
     int file_fd;
 
     // Extract the destination path from the command
@@ -84,8 +81,11 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
 
     if (parsed < 1) {
         printf("Command parsing failed\n");
+        send(client_sock, "File upload failed", 18, 0);
         return;
     }
+
+    
 
     char *new_file_path = create_pdf_path(destination_path);
     if (new_file_path != NULL) {
@@ -99,6 +99,8 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
             snprintf(command_buf, sizeof(command_buf), "mkdir -p %s", new_file_path);
             if (system(command_buf) != 0) {
                 perror("Directory creation failed");
+                send(client_sock, "File upload failed", 18, 0);
+                free(new_file_path);
                 return;
             }
             // Restore the original path
@@ -109,6 +111,9 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
         file_fd = open(new_file_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
         if (file_fd < 0) {
             perror("File creation failed");
+            send(client_sock, "File upload failed", 18, 0);
+            close(file_fd);
+            free(new_file_path);
             return;
         }
 
@@ -116,12 +121,22 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
         ssize_t file_data_len = strlen(file_data);
         if (write(file_fd, file_data, file_data_len) < 0) {
             perror("File write failed");
+            send(client_sock, "File upload failed", 18, 0);
+            close(file_fd);
+            free(new_file_path);
         }
 
         close(file_fd);
 
-    }
+        // Send confirmation to the client
+        const char *success_message = "File Uploaded successfully.";
+        send(client_sock, success_message, strlen(success_message), 0);
 
+        free(new_file_path);
+    }else{
+        const char *failed_message = "File uploading failed!";
+        send(client_sock, failed_message, strlen(failed_message), 0);
+    }
 }
 
 
@@ -185,13 +200,31 @@ void handle_rmfile(int client_sock, char *command) {
         printf("Command parsing failed\n");
         return;
     }
+    char *new_file_path = create_pdf_path(file_path);
+    if(new_file_path != NULL){
+        // check if file exist or not
+        if (access(new_file_path, F_OK) == -1) {
+            // Send rejction to the client
+            const char *success_message = "File not found!";
+            send(client_sock, success_message, strlen(success_message), 0);
+            return;
+        }
+        
+        // if exist then delete
+        if (delete_file(new_file_path) != 0) {
+            // Send rejction to the client
+            const char *success_message = "File remove Failed!";
+            send(client_sock, success_message, strlen(success_message), 0);
 
-    // Debug prints to ensure correct extraction
-    printf("File requested for remove: %s\n", file_path);
-    if (delete_file(file_path) != 0) {
-            printf("Error deleting file: %s\n", file_path);
+        }else{
+            // Send rejction to the client
+            const char *success_message = "File has been removed.";
+            send(client_sock, success_message, strlen(success_message), 0);
+        }
     }else{
-        printf("Succesful deletion...\n");
+        // Send rejction to the client
+        const char *success_message = "File remove Failed!";
+        send(client_sock, success_message, strlen(success_message), 0);
     }
 }
 

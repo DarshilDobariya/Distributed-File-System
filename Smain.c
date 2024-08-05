@@ -10,7 +10,7 @@
 #include <fcntl.h>
 #include <errno.h>
 
-#define PORT 8083
+#define PORT 8080
 #define BUFSIZE 1024
 
 // Function prototypes
@@ -287,55 +287,7 @@ void send_file_to_client(int server_sock, const char *file_path) {
 
 // Function to handle 'rmfile' command
 void handle_rmfile(int client_sock, char *command) {
-    char file_path[256];
-    int server_sock;
-
-    sscanf(command, "rmfile %s", file_path);
     
-    // Make a copy of file_path for tokenization
-    char file_path_copy[BUFSIZE];
-    strncpy(file_path_copy, file_path, BUFSIZE - 1);
-    file_path_copy[BUFSIZE - 1] = '\0';
-
-    // Tokenize the file path to get the file name
-    char *file_name = NULL;
-    char *token = strtok(file_path_copy, "/");
-    while (token != NULL) {
-        file_name = token;
-        token = strtok(NULL, "/");
-    }
-    printf("file_name: %s\n",file_name);
-
-    // check for the extention and pass it to the server
-    if (strstr(file_name, ".pdf") != NULL) {
-        // Forward to Spdf server
-        server_sock = connect_to_spdf();
-        if (server_sock < 0) {
-            printf("Failed to connect to Spdf server\n");
-            return;
-        }
-        remove_file_from_server(server_sock, "rmfile", file_path);
-        close(server_sock);
-
-    } else if (strstr(file_name, ".txt") != NULL) {
-        // Forward to Stext server
-        server_sock = connect_to_stext();
-        if (server_sock < 0) {
-            printf("Failed to connect to Stext server\n");
-            return;
-        }
-        remove_file_from_server(server_sock, "rmfile", file_path);
-        close(server_sock);
-
-    } else if (strstr(file_name, ".c") != NULL) {
-        // Delete the .c file
-        if (delete_file(file_path) != 0) {
-            printf("Error deleting file: %s\n", file_path);
-        }
-
-    } else {
-        printf("Unsupported file type: %s\n", file_name);
-    }
     char file_path[256];
     int server_sock;
 

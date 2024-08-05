@@ -18,26 +18,41 @@
 // Function prototypes
 void handle_client(int client_sock);
 void receive_and_save_file(int sock, char *file_path);
-void handle_ufile(int client_sock, char *command);
+void handle_ufile(int client_sock, char *command, char *file_data);
+
 void handle_dfile(int client_sock, char *command);
 void handle_rmfile(int client_sock, char *command);
 void handle_dtar(int client_sock, char *command);
 void handle_display(int client_sock, char *command);
 
-// Function to handle communication with a connected client
 void handle_client(int client_sock) {
     char buffer[BUFSIZE];
     ssize_t bytes_received;
-    
-    // Receive the command from the client
+    char *command;
+    char *file_data;
+
+    // Receive the combined message from the client
     bytes_received = recv(client_sock, buffer, sizeof(buffer) - 1, 0);
     if (bytes_received > 0) {
-        buffer[bytes_received] = '\0'; // Null-terminate the received command
-        printf("Command received: %s\n", buffer);
+        buffer[bytes_received] = '\0'; // Null-terminate the received data
+        printf("Combined message received: %s\n", buffer);
+
+        // Find the newline that separates the command/path from the file data
+        char *delimiter = strstr(buffer, "\n");
+        if (delimiter == NULL) {
+            printf("Invalid message format\n");
+            return;
+        }
+        
+        // Null-terminate the command
+        *delimiter = '\0';
+
+        // Extract the file data
+        file_data = delimiter + 1;
 
         // Determine which command to process
         if (strncmp(buffer, "ufile", 5) == 0) {
-            handle_ufile(client_sock, buffer);
+            handle_ufile(client_sock, buffer, file_data);
         } else if (strncmp(buffer, "dfile", 5) == 0) {
             handle_dfile(client_sock, buffer);
         } else if (strncmp(buffer, "rmfile", 6) == 0) {
@@ -59,52 +74,20 @@ void handle_client(int client_sock) {
 
     close(client_sock);
 }
-
-// Function to receive a file from the client and save it to the specified path
-void receive_and_save_file(int sock, char *file_path) {
-    char buffer[BUFSIZE];
-    int file_fd;
-    ssize_t bytes_received;
-
-    // Create the file for writing
-    file_fd = open(file_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (file_fd < 0) {
-        perror("File creation failed");
-        return;
-    }
-
-    // Receive and write the file content
-    while ((bytes_received = recv(sock, buffer, BUFSIZE, 0)) > 0) {
-        write(file_fd, buffer, bytes_received);
-    }
-
-    close(file_fd);
-}
-
-// Function to handle 'ufile' command
-// Function to handle 'ufile' command
-// Function to handle 'ufile' command
-void handle_ufile(int client_sock, char *command) {
+void handle_ufile(int client_sock, char *command, char *file_data) {
     char destination_path[1024];
     char new_path[1024];
-    char filename[256];
+    char *filename;
     char *pos;
-    
-    // Ensure command string is properly null-terminated
-    command[strcspn(command, "\r\n")] = '\0';
+    int file_fd;
 
-    // Extract the filename and destination path from the command
-    // Adjust format specifier to handle possible spaces in filenames
-    int parsed = sscanf(command, "ufile %s",destination_path);
+    // Extract the destination path from the command
+    int parsed = sscanf(command, "ufile %s", destination_path);
 
     if (parsed < 1) {
         printf("Command parsing failed\n");
         return;
     }
-
-    // Debug prints to ensure correct extraction
-    printf("Filename: %s\n", filename);
-    printf("Original destination path: %s\n", destination_path);
 
     // Find the position of "smain" in the original path
     pos = strstr(destination_path, "smain");
@@ -114,8 +97,8 @@ void handle_ufile(int client_sock, char *command) {
         strncpy(new_path, destination_path, prefix_len);
         new_path[prefix_len] = '\0'; // Null-terminate the string
 
-        // Append "stxt" to new_path
-        strcat(new_path, "stxt");
+        // Append "stext" to new_path
+        strcat(new_path, "stext");
 
         // Append the rest of the original path after "smain"
         strcat(new_path, pos + strlen("smain"));
@@ -143,14 +126,64 @@ void handle_ufile(int client_sock, char *command) {
         *last_slash = '/';  
     }
 
-    // Save the file
-    receive_and_save_file(client_sock, new_path);
+    // Create the file for writing
+    file_fd = open(new_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (file_fd < 0) {
+        perror("File creation failed");
+        return;
+    }
+
+    // Write the file data to the file
+    ssize_t file_data_len = strlen(file_data);
+    if (write(file_fd, file_data, file_data_len) < 0) {
+        perror("File write failed");
+    }
+
+    close(file_fd);
 }
+
 
 // Placeholder functions for other commands
 void handle_dfile(int client_sock, char *command) {
-    // Placeholder for 'dfile' command
-    printf("Handling 'dfile' command: %s\n", command);
+    char file_path[1024];
+    char buffer[BUFSIZE];
+    int file_fd;
+    ssize_t bytes_read;
+
+    // Ensure command string is properly null-terminated
+    command[strcspn(command, "\r\n")] = '\0';
+
+    // Extract the file path from the command
+    if (sscanf(command, "dfile %s", file_path) != 1) {
+        printf("Command parsing failed\n");
+        return;
+    }
+
+    // Debug prints to ensure correct extraction
+    printf("File requested for download: %s\n", file_path);
+
+    // Open the requested file
+    file_fd = open(file_path, O_RDONLY);
+    if (file_fd < 0) {
+        perror("File open failed");
+        return;
+    }
+
+    // Send the file content to the client
+    while ((bytes_read = read(file_fd, buffer, BUFSIZE)) > 0) {
+        if (send(client_sock, buffer, bytes_read, 0) < 0) {
+            perror("Send failed");
+            close(file_fd);
+            return;
+        }
+    }
+
+    // Check if read failed
+    if (bytes_read < 0) {
+        perror("File read failed");
+    }
+
+    close(file_fd);
 }
 
 void handle_rmfile(int client_sock, char *command) {
@@ -201,7 +234,7 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    printf("Stxt server is listening on port %d\n", PORT);
+    printf("Stext server is listening on port %d\n", PORT);
 
     while (1) {
         // Accept a client connection
@@ -220,12 +253,15 @@ int main() {
             // In the child process
             close(server_sock);  // Close the server socket in the child
             handle_client(client_sock);  // Handle communication with the client
-            close(client_sock);  // Close the client socket
+                       close(client_sock);  // Close the client socket in the child
             exit(0);  // Exit the child process
         } else if (child_pid > 0) {
             // In the parent process
             close(client_sock);  // Close the client socket in the parent
-            waitpid(-1, NULL, WNOHANG);  // Wait for child processes to terminate
+            // Wait for terminated child processes to avoid zombie processes
+            while (waitpid(-1, NULL, WNOHANG) > 0) {
+                // Continue to reap any terminated child processes
+            }
         } else {
             perror("Fork failed");
         }
@@ -234,3 +270,4 @@ int main() {
     close(server_sock);  // Close the server socket
     return 0;
 }
+

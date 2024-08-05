@@ -10,21 +10,20 @@
 #include <fcntl.h>
 #include <errno.h>
 
-// Define constants for the port number and buffer size
 #define PORT 8080
 #define BUFSIZE 1024
 
 // Function prototypes
 void prcclient(int client_sock);
-void handle_ufile(int client_sock, char *command);
+void handle_ufile(int client_sock, char *command, char *file_data);
 void handle_dfile(int client_sock, char *command);
 void handle_rmfile(int client_sock, char *command);
 void handle_dtar(int client_sock, char *command);
 void handle_display(int client_sock, char *command);
 int connect_to_spdf();
 int connect_to_stext();
-void send_file_to_server(int server_sock, char *command, char *filename, char *destination_path);
-void receive_and_save_file(int sock, char *destination_path, char *f_name);
+void send_file_to_server(int server_sock, char *command, char *filename, char *destination_path, char *file_data);
+void receive_and_save_file(int sock, char *destination_path, char *f_name, char *file_data);
 
 int main() {
     int server_sock, client_sock;
@@ -103,9 +102,16 @@ void prcclient(int client_sock) {
         buffer[bytes_read] = '\0';  // Null-terminate the received string
         printf("Received command: %s\n", buffer);  // Print the received command
 
+        // Separate command and file data
+        char *file_data = strstr(buffer, "END_CMD");
+        if (file_data) {
+            *file_data = '\0';  // Null-terminate the command part
+            file_data += strlen("END_CMD");  // Skip "END_CMD"
+        }
+
         // Determine which command to process
         if (strncmp(buffer, "ufile", 5) == 0) {
-            handle_ufile(client_sock, buffer);
+            handle_ufile(client_sock, buffer, file_data);
         } else if (strncmp(buffer, "dfile", 5) == 0) {
             handle_dfile(client_sock, buffer);
         } else if (strncmp(buffer, "rmfile", 6) == 0) {
@@ -121,7 +127,7 @@ void prcclient(int client_sock) {
 }
 
 // Function to handle 'ufile' command
-void handle_ufile(int client_sock, char *command) {
+void handle_ufile(int client_sock, char *command, char *file_data) {
     char filename[256], destination_path[256];
     int server_sock;
 
@@ -135,7 +141,7 @@ void handle_ufile(int client_sock, char *command) {
             printf("Failed to connect to Spdf server\n");
             return;
         }
-        send_file_to_server(server_sock, "ufile", filename, destination_path);
+        send_file_to_server(server_sock, "ufile", filename, destination_path, file_data);
         close(server_sock);
 
     } else if (strstr(filename, ".txt") != NULL) {
@@ -145,12 +151,12 @@ void handle_ufile(int client_sock, char *command) {
             printf("Failed to connect to Stext server\n");
             return;
         }
-        send_file_to_server(server_sock, "ufile", filename, destination_path);
+        send_file_to_server(server_sock, "ufile", filename, destination_path, file_data);
         close(server_sock);
 
     } else if (strstr(filename, ".c") != NULL) {
-        // Store locally
-        receive_and_save_file(client_sock, destination_path, filename);
+        // Save locally
+        receive_and_save_file(client_sock, destination_path, filename, file_data);
     } else {
         printf("Unsupported file type: %s\n", filename);
     }
@@ -242,10 +248,9 @@ int connect_to_stext() {
 
 // Function to send a file to a specified server
 // Function to send a file to a specified server
-void send_file_to_server(int server_sock, char *command, char *filename, char *destination_path) {
+void send_file_to_server(int server_sock, char *command, char *filename, char *destination_path, char *file_data) {
     char buffer[BUFSIZE];
-    ssize_t bytes_sent, bytes_read;
-    int file_fd;
+    ssize_t bytes_sent;
 
     // Replace ~ with the value of the HOME environment variable
     const char *home_dir = getenv("HOME");
@@ -254,47 +259,44 @@ void send_file_to_server(int server_sock, char *command, char *filename, char *d
         return;
     }
     
-    // new file path creation to replace ~
+    // Construct the full path for the file (FilePath + file name)
     char full_path[BUFSIZE];
     if (destination_path[0] == '~') {
-        snprintf(full_path, sizeof(full_path), "%s%s", home_dir, destination_path + 1);
+        snprintf(full_path, sizeof(full_path), "%s/%s/%s", home_dir, destination_path + 1, filename);
     } else {
-        strncpy(full_path, destination_path, sizeof(full_path) - 1);
-        full_path[sizeof(full_path) - 1] = '\0';
+        snprintf(full_path, sizeof(full_path), "%s/%s", destination_path, filename);
     }
-    
-    // Construct the full path for the file(FilePath + file name)
-    char final_path[512];
-    snprintf(final_path, sizeof(final_path), "%s/%s", full_path, filename);
     
     // Construct the message with the command and the full path
     char message[BUFSIZE];
-    snprintf(message, sizeof(message), "%s %s", command, final_path);
+    snprintf(message, sizeof(message), "%s %s\n", command, full_path);
 
-    // Send the message (command and full path)
-    bytes_sent = send(server_sock, message, strlen(message) + 1, 0);
+    // Calculate the total length of the message including file data
+    size_t total_length = strlen(message) + strlen(file_data) + 1; // +1 for null terminator
+    
+    // Allocate buffer for the complete message
+    char *complete_message = malloc(total_length);
+    if (complete_message == NULL) {
+        perror("Memory allocation failed");
+        return;
+    }
+
+    // Copy the message and file data into the complete_message buffer
+    strcpy(complete_message, message);
+    strcat(complete_message, file_data);
+
+    // Send the complete message (command, full path, and file data in one go)
+    bytes_sent = send(server_sock, complete_message, total_length - 1, 0); // -1 to exclude the null terminator
     if (bytes_sent < 0) {
-        perror("Send message failed");
-        return;
+        perror("Send failed");
     }
 
-    // Open the file
-    file_fd = open(filename, O_RDONLY);
-    if (file_fd < 0) {
-        perror("File open failed");
-        return;
-    }
-
-    // Read and send the file content
-    while ((bytes_read = read(file_fd, buffer, BUFSIZE)) > 0) {
-        send(server_sock, buffer, bytes_read, 0);
-    }
-
-    close(file_fd);
+    // Free allocated memory
+    free(complete_message);
 }
 
 // Function to receive a file from a client and save it to the specified destination
-void receive_and_save_file(int sock, char *destination_path, char *f_name) {
+void receive_and_save_file(int sock, char *destination_path, char *f_name, char *file_data) {
     char buffer[BUFSIZE];
     int file_fd;
     ssize_t bytes_received;
@@ -307,7 +309,7 @@ void receive_and_save_file(int sock, char *destination_path, char *f_name) {
         return;
     }
 
-    // new file path creation to replace ~
+    // Create the full path for the file
     char full_path[BUFSIZE];
     if (destination_path[0] == '~') {
         snprintf(full_path, sizeof(full_path), "%s%s", home_dir, destination_path + 1);
@@ -317,7 +319,7 @@ void receive_and_save_file(int sock, char *destination_path, char *f_name) {
     }
 
     // Copy the destination path to dir_path
-    strncpy(dir_path, destination_path, sizeof(dir_path) - 1);
+    strncpy(dir_path, full_path, sizeof(dir_path) - 1);
     dir_path[sizeof(dir_path) - 1] = '\0';
 
     // Ensure the destination directory exists
@@ -325,7 +327,7 @@ void receive_and_save_file(int sock, char *destination_path, char *f_name) {
     snprintf(command, sizeof(command), "mkdir -p %s", dir_path);
     system(command);
 
-    // Construct the full path for the file(path + file name)
+    // Construct the full path for the file (path + file name)
     char final_path[512];
     snprintf(final_path, sizeof(final_path), "%s/%s", full_path, f_name);
 
@@ -338,9 +340,9 @@ void receive_and_save_file(int sock, char *destination_path, char *f_name) {
         return;
     }
 
-    // Receive and write the file content
-    while ((bytes_received = recv(sock, buffer, BUFSIZE, 0)) > 0) {
-        write(file_fd, buffer, bytes_received);
+    // Write the received file data
+    if (file_data) {
+        write(file_fd, file_data, strlen(file_data));
     }
 
     close(file_fd);

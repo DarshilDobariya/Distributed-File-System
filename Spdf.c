@@ -14,6 +14,7 @@
 // Define constants for the port number and buffer size
 #define PORT 8081
 #define BUFSIZE 1024
+#define CMD_END_MARKER "END_CMD"
 
 // Function prototypes
 void handle_client(int client_sock);
@@ -25,6 +26,8 @@ void handle_dfile(int client_sock, char *command);
 void handle_rmfile(int client_sock, char *command);
 void handle_dtar(int client_sock, char *command);
 void handle_display(int client_sock, char *command);
+void send_file_back_to_smain(int smain_sock, const char *file_path, const char *file_name);
+
 
 void handle_client(int client_sock) {
     char buffer[BUFSIZE];
@@ -84,8 +87,6 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
         send(client_sock, "File upload failed", 18, 0);
         return;
     }
-
-    
 
     char *new_file_path = create_pdf_path(destination_path);
     if (new_file_path != NULL) {
@@ -152,35 +153,28 @@ void handle_dfile(int client_sock, char *command) {
 
     // Extract the file path from the command
     if (sscanf(command, "dfile %s", file_path) != 1) {
-        printf("Command parsing failed\n");
+        printf("Command parsing failed!\n");
+        // Send rejction to the client
+        const char *success_message = "ERROR: Command parsing failed!";
+        send(client_sock, success_message, strlen(success_message), 0);
         return;
     }
 
     // Debug prints to ensure correct extraction
     printf("File requested for download: %s\n", file_path);
 
-    // Open the requested file
-    file_fd = open(file_path, O_RDONLY);
-    if (file_fd < 0) {
-        perror("File open failed");
-        return;
-    }
+    char *new_file_path = create_pdf_path(file_path);
 
-    // Send the file content to the client
-    while ((bytes_read = read(file_fd, buffer, BUFSIZE)) > 0) {
-        if (send(client_sock, buffer, bytes_read, 0) < 0) {
-            perror("Send failed");
-            close(file_fd);
-            return;
-        }
-    }
+    printf("new_file_path: %s\n",new_file_path);
 
-    // Check if read failed
-    if (bytes_read < 0) {
-        perror("File read failed");
-    }
+    // Extract the file name
+    char *file_name = strrchr(file_path, '/') + 1;
 
-    close(file_fd);
+    // Send file to client
+    send_file_back_to_smain(client_sock, new_file_path, file_name);
+
+    // Clean up
+    free(new_file_path);
 }
 
 void handle_rmfile(int client_sock, char *command) {
@@ -245,7 +239,7 @@ int delete_file(const char *file_path) {
     const char *home_dir = getenv("HOME");
     if (home_dir == NULL) {
         fprintf(stderr, "Failed to get HOME environment variable\n");
-        return;
+        return -1;
     }
 
     // new file path creation to replace ~
@@ -314,6 +308,72 @@ char* create_pdf_path(const char *destination_path) {
 
     return new_path;
 }
+
+void send_file_back_to_smain(int smain_sock, const char *file_path, const char *file_name) {
+    
+    // Replace ~ with the value of the HOME environment variable
+    const char *home_dir = getenv("HOME");
+    if (home_dir == NULL) {
+        fprintf(stderr, "Failed to get HOME environment variable\n");
+        return;
+    }
+
+    // Construct the full path for the file
+    char full_path[BUFSIZE];
+    if (file_path[0] == '~') {
+        snprintf(full_path, sizeof(full_path), "%s%s", home_dir, file_path + 1);
+    } else {
+        snprintf(full_path, sizeof(full_path), "%s", file_path);
+    }
+
+    // Open the file for reading
+    int file_fd = open(full_path, O_RDONLY);
+    if (file_fd < 0) {
+        perror("File not found!");
+        // Send rejction to the client
+        const char *success_message = "ERROR: File not found!";
+        send(smain_sock, success_message, strlen(success_message), 0);
+        return;
+    }
+
+    // Send the file name
+    send(smain_sock, file_name, strlen(file_name), 0);
+
+    // Read the file and send its contents to the client
+    char buffer_content[BUFSIZE];
+    ssize_t bytes_read, bytes_sent;
+    while ((bytes_read = read(file_fd, buffer_content, sizeof(buffer_content))) > 0) {
+        // Debug print: show the content being sent
+        printf("Read %zd bytes\n", bytes_read);
+        bytes_sent = send(smain_sock, buffer_content, bytes_read, 0);
+        if (bytes_sent < 0) {
+            perror("Error sending file");
+            // Send rejction to the client
+            const char *success_message = "ERROR: Download Failed!";
+            send(smain_sock, success_message, strlen(success_message), 0);
+            break;
+        }
+    }
+    if (bytes_read < 0) {
+        perror("Error reading file");
+        // Send rejction to the client
+        const char *success_message = "ERROR: Error reading file!";
+        send(smain_sock, success_message, strlen(success_message), 0);
+    }
+    close(file_fd);
+
+    // Send the end marker
+    if (send(smain_sock, CMD_END_MARKER, strlen(CMD_END_MARKER), 0) == -1) {
+        perror("Failed serve request");
+        // Send rejction to the client
+        const char *success_message = "ERROR: Failed to serve request!";
+        send(smain_sock, success_message, strlen(success_message), 0);
+    }
+}
+
+
+
+
 
 int main() {
     int server_sock, client_sock;

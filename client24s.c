@@ -10,7 +10,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 
-#define PORT 8083
+#define PORT 8080
 #define BUFSIZE 1024
 #define MAX_TOKENS 10
 #define CMD_END_MARKER "END_CMD" // Marker to indicate the end of the command
@@ -80,18 +80,18 @@ void send_file(int sock, char *filename, char *destination_path) {
     int file_fd;
     ssize_t bytes_read;
     size_t total_size;
- 
+
     // Open the file
     file_fd = open(filename, O_RDONLY);
     if (file_fd < 0) {
         perror("File open failed");
         return;
     }
- 
+
     // Determine the file size
     total_size = lseek(file_fd, 0, SEEK_END);
     lseek(file_fd, 0, SEEK_SET);
- 
+
     // Allocate memory for the entire message
     char *message = malloc(total_size + BUFSIZE + strlen(CMD_END_MARKER) + 1);
     if (message == NULL) {
@@ -99,20 +99,20 @@ void send_file(int sock, char *filename, char *destination_path) {
         close(file_fd);
         return;
     }
- 
+
     // Build the command string
     snprintf(message, total_size + BUFSIZE + strlen(CMD_END_MARKER) + 1, "ufile %s %s %s", filename, destination_path, CMD_END_MARKER);
- 
+
     // Append the file content
     ssize_t message_len = strlen(message);
     while ((bytes_read = read(file_fd, buffer, BUFSIZE)) > 0) {
         memcpy(message + message_len, buffer, bytes_read);
         message_len += bytes_read;
     }
- 
+
     // Send the entire message to the server
     send(sock, message, message_len, 0);
- 
+
     // Clean up
     free(message);
     close(file_fd);
@@ -192,11 +192,13 @@ void handle_ufile(int sock, char *tokens[]) {
     }
 }
 
+// Handle dfile command
 void handle_dfile(int sock, char *tokens[]) {
     if (!tokens[1]) {
         printf("Error: Missing filename for dfile.\n");
         return;
     }
+    
     char *file_path = tokens[1];
     char command[BUFSIZE];
     snprintf(command, sizeof(command), "dfile %s", file_path);
@@ -207,76 +209,64 @@ void handle_dfile(int sock, char *tokens[]) {
         return;
     }
 
-    // Buffer to receive data
-    char buffer[BUFSIZE];
-    char final_file_name[BUFSIZE];
-    ssize_t bytes_received;
+    // Receive the file name
+    char buff_name[BUFSIZE];
+    ssize_t bytes_received = recv(sock, buff_name, sizeof(buff_name) - 1, 0);
+    if (bytes_received < 0) {
+        perror("Error receiving file name");
+        return;
+    }
+    buff_name[bytes_received] = '\0';
 
-    // Read the file name
-    bytes_received = recv(sock, buffer, BUFSIZE - 1, 0);
-    if (bytes_received <= 0) {
-        perror("Receive failed or connection closed");
+    // Check if the response is an error message
+    const char *error_prefix = "ERROR:";
+    if (strncmp(buff_name, error_prefix, strlen(error_prefix)) == 0) {
+        printf("Server: %s\n", buff_name);
         return;
     }
-    buffer[bytes_received] = '\0';
-    
-    // Extract the filename
-    char *file_name = strtok(buffer, "\n");
-    strcpy(final_file_name,file_name);
-    if (!file_name) {
-        printf("Error: Invalid response from server, no file name found.\n");
-        return;
-    }
-    
 
-    // Read the file size
-    bytes_received = recv(sock, buffer, BUFSIZE - 1, 0);
-    if (bytes_received <= 0) {
-        perror("Receive failed or connection closed");
+    // Create a file to save the received content
+    FILE *fp = fopen(buff_name, "wb");
+    if (!fp) {
+        perror("Error opening file for writing");
         return;
     }
-    buffer[bytes_received] = '\0';
- printf("\n file_name: %s",final_file_name);
-    printf("\n file_Size: %s",buffer);
-    // Open the file to write in the current directory
-    FILE *file = fopen(final_file_name, "wb");
-    if (!file) {
-        perror("File open failed");
-        return;
-    }
-    // Correctly parse the file size
-    off_t file_size = atol(buffer);
-    if (file_size <= 0) {
-        printf("Error: Invalid file size received.\n");
-        return;
-    }
-   printf("\n file_name: %s",final_file_name);
-    // // Open the file to write in the current directory
-    // FILE *file = open(file_name, "wb");
-    // if (!file) {
-    //     perror("File open failed");
-    //     return;
-    // }
-    printf(" i am here");
-    // Receive and write the file content
-    off_t total_received = 0;
-    while (total_received < file_size) {
-        bytes_received = recv(sock, buffer, BUFSIZE, 0);
-        if (bytes_received <= 0) {
-            perror("Receive failed or connection closed");
-            fclose(file);
-            return;
+
+     // Receive the file content
+    char buffer_content[BUFSIZE];
+    size_t marker_len = strlen(CMD_END_MARKER);
+    int download_successful = 0;
+
+    while ((bytes_received = recv(sock, buffer_content, sizeof(buffer_content), 0)) > 0) {
+        // Check for end marker
+        if (bytes_received >= marker_len && 
+            memcmp(buffer_content + bytes_received - marker_len, CMD_END_MARKER, marker_len) == 0) {
+            // Write up to the end marker and break the loop
+            fwrite(buffer_content, 1, bytes_received - marker_len, fp);
+            download_successful = 1;
+            break;
         }
-        fwrite(buffer, 1, bytes_received, file);
-        total_received += bytes_received;
+        
+        size_t written = fwrite(buffer_content, 1, bytes_received, fp);
+        if (written < (size_t)bytes_received) {
+            perror("Error writing to file");
+            break;
+        }
     }
 
-    printf("File %s downloaded successfully\n", file_name);
+    if (bytes_received < 0) {
+        perror("Error receiving file");
+    }
 
-    fclose(file);
+    fclose(fp);
+
+    if (download_successful) {
+        printf("  Your file has been downloaded.\n");
+    } else {
+        printf("\tFailed: Download interupted.!\n");
+    }
+
 }
-
-
 
 // Handle rmfile command
 void handle_rmfile(int sock, char *tokens[]) {

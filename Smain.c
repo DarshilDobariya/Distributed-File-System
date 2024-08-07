@@ -13,6 +13,7 @@
 
 #define PORT 8080
 #define BUFSIZE 1024
+#define CMD_END_MARKER "END_CMD"
 
 // Function prototypes
 void prcclient(int client_sock);
@@ -26,7 +27,9 @@ int connect_to_stext();
 void send_file_to_server(int server_sock, int client_sock, char *command, char *filename, char *destination_path, char *file_data);
 int receive_and_save_file(int sock, char *destination_path, char *f_name, char *file_data);
 void remove_file_from_server(int sock, int client_sock, char *command, char *destination_path);
+void send_file_to_client(int client_sock, const char *file_path, const char *file_name);
 int delete_file(const char *file_path);
+void send_download_request(int server_sock, int client_sock, char *command, char *file_path);
 
 int main() {
     int server_sock, client_sock;
@@ -129,6 +132,14 @@ void prcclient(int client_sock) {
     }
 }
 
+int is_valid_path(const char *path) {
+    // Check if the path starts with "smain"
+    if (strncmp(path, "~/smain",7) != 0) {
+        return 0; // Invalid path
+    }
+    return 1; // Valid path
+}
+
 // Function to handle 'ufile' command
 void handle_ufile(int client_sock, char *command, char *file_data) {
     char filename[256], destination_path[256];
@@ -181,125 +192,113 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
 
 // Function to handle 'dfile' command
 void handle_dfile(int client_sock, char *command) {
+    int server_sock;
     char file_path[256];
     sscanf(command, "dfile %s", file_path);
-    printf("Downloading file: %s\n", file_path);
+    printf("file_path: %s\n", file_path);
 
+    // check if requested doenload file path is valid or not
+    if(!is_valid_path(file_path)){
+        printf("ERROR: Invalid path!\n");
+        // Send error message if the path is invalid
+        const char *error_message = "ERROR: Invalid path!";
+        send(client_sock, error_message, strlen(error_message), 0);
+        return;
+    }
+    
+    // Extract the file name
+    char *file_name = strrchr(file_path, '/') + 1;
+
+    printf("file_name: %s\n",file_name);
+    if (!file_name) {
+        send(client_sock, "Invalid file path", 17, 0);
+        return;
+    }
+
+    if(strstr(file_name,".c") != NULL){
+        printf("c file\n");
+        send_file_to_client(client_sock, file_path, file_name);
+    }else if(strstr(file_name,".txt") != NULL){
+        printf("txt file\n");
+        // Forward to Stext server
+        server_sock = connect_to_stext();
+        if (server_sock < 0) {
+            printf("Failed to connect to Stext server\n");
+            return;
+        }
+        send_download_request(server_sock, client_sock, "dfile", file_path);
+        close(server_sock);
+
+    }else if(strstr(file_name,".pdf") != NULL){
+        printf("pdf file\n");
+        // Forward to Stext server
+        server_sock = connect_to_spdf();
+        if (server_sock < 0) {
+            printf("Failed to connect to Stext server\n");
+            return;
+        }
+        send_download_request(server_sock, client_sock, "dfile", file_path);
+        close(server_sock);
+
+    }else{
+        printf("Invalid file type\n");
+        // Send an error message to the client with a specific prefix
+        const char *success_message = "ERROR: Invalid file type!";
+        send(client_sock, success_message, strlen(success_message), 0);
+        return;
+    }
+}
+
+void send_file_to_client(int client_sock, const char *file_path, const char *file_name) {
+    
+    // Replace ~ with the value of the HOME environment variable
     const char *home_dir = getenv("HOME");
     if (home_dir == NULL) {
         fprintf(stderr, "Failed to get HOME environment variable\n");
         return;
     }
-    
-    // Construct the full path for the file (FilePath + file name)
+    // Construct the full path for the file
     char full_path[BUFSIZE];
     if (file_path[0] == '~') {
         snprintf(full_path, sizeof(full_path), "%s%s", home_dir, file_path + 1);
     } else {
         snprintf(full_path, sizeof(full_path), "%s", file_path);
     }
-    
-    // Make a copy of file_path for tokenization
-    char file_path_copy[BUFSIZE];
-    strncpy(file_path_copy, file_path, BUFSIZE - 1);
-    file_path_copy[BUFSIZE - 1] = '\0';
 
-    // Tokenize the file path to get the file name
-    char *file_name = NULL;
-    char *token = strtok(file_path_copy, "/");
-    while (token != NULL) {
-        file_name = token;
-        token = strtok(NULL, "/");
-    }
-    printf("file_name: %s\n",file_name);
-    printf("full_path: %s\n",full_path);
-
-
-    
-
-
-    if(strstr(file_name,".c") != NULL){
-        printf("c file\n");
-        send_file_to_client(client_sock,full_path);
-    }else if(strstr(file_name,".txt") != NULL){
-        printf("txt file\n");
-    }else if(strstr(file_name,".pdf") != NULL){
-        printf("pdf file\n");
-    }else{
-        printf("Invalid file name\n");
-    }
-}
-
-void send_file_to_client(int server_sock, const char *file_path) {
-    int fd;
-    ssize_t bytes_sent;
-    char buffer1[BUFSIZE];
-    char buffer2[BUFSIZE];
-    char buffer3[BUFSIZE];
-    // Extract the file name from the full path
-    const char *file_name = strrchr(file_path, '/');
-    if (file_name == NULL) {
-        file_name = file_path; // If no '/' is found, the file path is the file name
-    } else {
-        file_name++; // Skip the '/' character
-    }
-
-    // Open the file
-    fd = open(file_path, O_RDONLY);
-    if (fd < 0) {
-        perror("Failed to open file");
+    // Open the file for reading
+    int file_fd = open(full_path, O_RDONLY);
+    if (file_fd < 0) {
+        perror("File open failed");
+        // Send rejction to the client
+        const char *success_message = "ERROR: File not found!";
+        send(client_sock, success_message, strlen(success_message), 0);
         return;
     }
 
-    // Send the file name first
-    snprintf(buffer1, sizeof(buffer1), "%s\n", file_name);
-    bytes_sent = send(server_sock, buffer1, strlen(buffer1), 0);
-    if (bytes_sent < 0) {
-        perror("Send filename failed");
-        close(fd);
-        return;
-    }
-
-    // Determine the file size
-    off_t file_size = lseek(fd, 0, SEEK_END);
-    lseek(fd, 0, SEEK_SET);
-
-    // Send the file size
-    snprintf(buffer2, sizeof(buffer2), "%ld\n", file_size);
-    bytes_sent = send(server_sock, buffer2, strlen(buffer2), 0);
-    if (bytes_sent < 0) {
-        perror("Send filesize failed");
-        close(fd);
-        return;
-    }
-
-    // Send the file data in chunks
-    ssize_t bytes_read;
-    while ((bytes_read = read(fd, buffer3, sizeof(buffer3))) > 0) {
-        bytes_sent = send(server_sock, buffer3, bytes_read, 0);
+    // send file name
+    send(client_sock, file_name, strlen(file_name), 0);
+    // Read the file and send its contents to the client
+    char buffer_content[BUFSIZE];
+    ssize_t bytes_read,bytes_sent;
+    while ((bytes_read = read(file_fd, buffer_content, sizeof(buffer_content))) > 0) {
+        // Debug print: show the content being sent
+        printf("Read %zd bytes: %.*s\n", bytes_read, (int)bytes_read, buffer_content);
+        bytes_sent = send(client_sock, buffer_content, bytes_read, 0);
         if (bytes_sent < 0) {
-            perror("Send file data failed");
-            close(fd);
-            return;
+            perror("Error sending file");
+            break;
         }
     }
-
     if (bytes_read < 0) {
-        perror("Read file failed");
+        perror("Error reading file");
+    }
+    close(file_fd);
+    // Send the end marker
+    if (send(client_sock, CMD_END_MARKER, strlen(CMD_END_MARKER), 0) == -1) {
+        perror("Failed to send end marker");
     }
 
-    // Close the file
-    close(fd);
 }
-
-
-
-
-
-
-
-
-
 
 
 // Function to handle 'rmfile' command
@@ -430,7 +429,6 @@ int connect_to_stext() {
 }
 
 
-// Function to send a file to a specified server
 // Function to send a file to a specified server
 void send_file_to_server(int server_sock, int client_sock, char *command, char *filename, char *destination_path, char *file_data) {
     char buffer[BUFSIZE];
@@ -603,7 +601,7 @@ int delete_file(const char *file_path) {
     const char *home_dir = getenv("HOME");
     if (home_dir == NULL) {
         fprintf(stderr, "Failed to get HOME environment variable\n");
-        return;
+        return -1;
     }
 
     // new file path creation to replace ~
@@ -637,4 +635,80 @@ int delete_file(const char *file_path) {
         }
         return -1;
     }
+}
+
+
+void send_download_request(int server_sock, int client_sock, char *command, char *file_path){
+    printf("pdf or txt\n");
+
+    printf("file_path: %s\n",file_path);
+
+    // Replace ~ with the value of the HOME environment variable
+    const char *home_dir = getenv("HOME");
+    if (home_dir == NULL) {
+        fprintf(stderr, "Failed to get HOME environment variable\n");
+        return;
+    }
+    
+    // Construct the full path for the file (FilePath + file name)
+    char full_path[BUFSIZE];
+    if (file_path[0] == '~') {
+        snprintf(full_path, sizeof(full_path), "%s%s", home_dir, file_path+1);
+    }
+    printf("fullpath: .%s.\n",full_path);
+
+    // Construct the message to send
+    char message[BUFSIZE];
+    snprintf(message, sizeof(message), "%s %s", command, full_path);
+    
+    // Send the message to the server
+    if (send(server_sock, message, strlen(message), 0) == -1) {
+        perror("send");
+        return;
+    }
+    printf("Message sent: %s\n", message);
+
+
+    // Receive the file name from the server
+    char file_name[256];
+    ssize_t bytes_received = recv(server_sock, file_name, sizeof(file_name) - 1, 0);
+    if (bytes_received <= 0) {
+        perror("Error receiving file name");
+        return;
+    }
+    file_name[bytes_received] = '\0'; // Null-terminate the file name
+    printf("Received file name: %s\n", file_name);
+
+
+    //send the file name to the client
+    if (send(client_sock, file_name, strlen(file_name), 0) == -1) {
+        perror("send");
+    }
+
+
+    // Receive the file content from the server and forward it to the client
+    char buffer[BUFSIZE];
+    ssize_t content_received;
+    while ((content_received = recv(server_sock, buffer, sizeof(buffer), 0)) > 0) {
+        // Debug print: Show the content being received
+        printf("Received %zd bytes of content\n", content_received);
+
+        // Forward the received content to the client
+        ssize_t bytes_sent = send(client_sock, buffer, content_received, 0);
+        if (bytes_sent < 0) {
+            perror("send");
+            break;
+        }
+
+        // Check for end marker if the buffer is smaller than BUFSIZE
+        if (content_received < BUFSIZE) {
+            if (memcmp(buffer + content_received - strlen(CMD_END_MARKER), CMD_END_MARKER, strlen(CMD_END_MARKER)) == 0) {
+                // Handle end of content
+                break;
+            }
+        }
+    }
+    if (content_received < 0) {
+        perror("Error receiving file content");
+    }    
 }

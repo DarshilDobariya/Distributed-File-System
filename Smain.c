@@ -10,6 +10,8 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/wait.h>
+#include <dirent.h>
+
 
 #define PORT 8080
 #define BUFSIZE 1024
@@ -30,6 +32,8 @@ void remove_file_from_server(int sock, int client_sock, char *command, char *des
 void send_file_to_client(int client_sock, const char *file_path, const char *file_name);
 int delete_file(const char *file_path);
 void send_download_request(int server_sock, int client_sock, char *command, char *file_path);
+void get_file_names_from_server(int (*connect_func)(), const char *message, const char *error_prefix, char *response_buffer, size_t buffer_size);
+
 
 int main() {
     int server_sock, client_sock;
@@ -371,7 +375,92 @@ void handle_dtar(int client_sock, char *command) {
 // Function to handle 'display' command
 void handle_display(int client_sock, char *command) {
     printf("Displaying files\n");
-    // Implement logic to display files
+    char pathname[256];
+    char full_path[BUFSIZE];
+    int server_sock;
+    struct stat path_stat;
+    int server_sock_pdf,server_sock_txt;
+
+    // Parse the pathname from the command
+    sscanf(command, "display %s", pathname);
+
+    // Initialize file lists
+    char c_files[BUFSIZE] = "";  // List of .c files
+    char pdf_files[BUFSIZE] = ""; // List of .pdf files from server
+    char txt_files[BUFSIZE] = ""; // List of .txt files from server
+
+    // Replace ~ with the value of the HOME environment variable
+    const char *home_dir = getenv("HOME");
+    if (home_dir == NULL) {
+        fprintf(stderr, "Failed to get HOME environment variable\n");
+        return;
+    }
+    // Construct the full path for the directory
+    if (pathname[0] == '~') {
+        snprintf(full_path, sizeof(full_path), "%s%s", home_dir, pathname + 1);
+    } else {
+        snprintf(full_path, sizeof(full_path), "%s", pathname);
+    }
+
+
+    int path_exists = 0;
+    if (stat(full_path, &path_stat) == 0) {
+        if (S_ISDIR(path_stat.st_mode)) {
+            path_exists = 1;
+            // Step 1: Retrieve the list of .c files from the local directory
+            DIR *dir = opendir(full_path);
+            struct dirent *entry;
+            if (dir != NULL) {
+                while ((entry = readdir(dir)) != NULL) {
+                    if (strstr(entry->d_name, ".c") != NULL) {
+                        strcat(c_files, entry->d_name);
+                        strcat(c_files, "\n");
+                    }
+                }
+                closedir(dir);
+            }
+        } else {
+            // Path exists but is not a directory
+            printf("ERROR: Not a directory in Smain!\n");
+        }
+    } else {
+        // Error in stat, path might not exist
+        printf("ERROR: Invalid path or not a directory in Smain!\n");
+    }
+
+    // Check if the response is an error message
+    const char *error_prefix = "ERROR:";
+
+    // Construct the message to send
+    char message[BUFSIZE];
+    snprintf(message, sizeof(message), "display %s", full_path);
+
+     // Retrieve .pdf files from Spdf server
+    get_file_names_from_server(connect_to_spdf, message, error_prefix, pdf_files, sizeof(pdf_files));
+
+    // Retrieve .txt files from Stext server
+    get_file_names_from_server(connect_to_stext, message, error_prefix, txt_files, sizeof(txt_files));
+
+
+
+    // Step 3: Combine the lists
+    char combined_list[3 * BUFSIZE] = "";
+    if (path_exists) {
+        strcat(combined_list, c_files);
+    }
+    strcat(combined_list, pdf_files);
+    strcat(combined_list, txt_files);
+
+
+    if(strlen(combined_list) == 0){
+        printf("Directory doesnot exist or No files, from Spdf and Stext...\n");
+        const char *error_message = "ERROR: Directory doesnot exist or No files found!";
+        send(client_sock, error_message, strlen(error_message), 0);
+    }else{
+        printf("All files: \n%s",combined_list);
+        send(client_sock,combined_list,strlen(combined_list),0);
+    }
+    
 }
 
 // Function to connect to the Spdf server
@@ -554,7 +643,7 @@ void remove_file_from_server(int sock, int client_sock, char *command, char *des
 
     char recv_buffer[BUFSIZE];
 
-     // Replace ~ with the value of the HOME environment variable
+    // Replace ~ with the value of the HOME environment variable
     const char *home_dir = getenv("HOME");
     if (home_dir == NULL) {
         fprintf(stderr, "Failed to get HOME environment variable\n");
@@ -711,4 +800,31 @@ void send_download_request(int server_sock, int client_sock, char *command, char
     if (content_received < 0) {
         perror("Error receiving file content");
     }    
+}
+
+
+// Function to handle server communication with fixed-size buffer
+void get_file_names_from_server(int (*connect_func)(), const char *message, const char *error_prefix, char *response_buffer, size_t buffer_size) {
+    int server_sock = connect_func();
+    if (server_sock < 0) {
+        printf("Failed to connect to server\n");
+        response_buffer[0] = '\0'; // Clear the buffer on connection failure
+        return;
+    }
+
+    send(server_sock, message, strlen(message), 0);
+
+    // Clear the response buffer
+    memset(response_buffer, 0, buffer_size);
+
+    // Receive the server response
+    recv(server_sock, response_buffer, buffer_size - 1, 0); // Read response, leaving space for null terminator
+
+    // Check if the response starts with the error prefix
+    if (strncmp(response_buffer, error_prefix, strlen(error_prefix)) != 0) {
+        close(server_sock);
+    } else {
+        response_buffer[0] = '\0'; // Clear the buffer on error
+        close(server_sock);
+    }
 }

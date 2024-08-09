@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <dirent.h>
 #include <sys/wait.h> // Include for waitpid
 
 // Define constants for the port number and buffer size
@@ -230,6 +231,53 @@ void handle_dtar(int client_sock, char *command) {
 void handle_display(int client_sock, char *command) {
     // Placeholder for 'display' command
     printf("Handling 'display' command: %s\n", command);
+    char dir_path[1024];
+    struct stat path_stat;
+
+    // Ensure command string is properly null-terminated
+    command[strcspn(command, "\r\n")] = '\0';
+
+    // Extract the file path from the command
+    if (sscanf(command, "display %s", dir_path) != 1) {
+        printf("Command parsing failed\n");
+        return;
+    }
+
+    char *new_dir_path = create_pdf_path(dir_path);
+    printf("new _dir: %s",new_dir_path);
+
+    // Check if pathname is a directory
+    if (stat(new_dir_path, &path_stat) != 0) {
+        // Error in stat, path might not exist
+        const char *error_message = "ERROR: Invalid path or not a directory!";
+        send(client_sock, error_message, strlen(error_message), 0);
+        printf("%s\n",error_message);
+        return;
+    }
+
+    if (!S_ISDIR(path_stat.st_mode)) {
+        // Path exists but is not a directory
+        const char *error_message = "ERROR: Not a directory!";
+        send(client_sock, error_message, strlen(error_message), 0);
+        printf("%s\n",error_message);
+        return;
+    }
+
+    char pdf_files[BUFSIZE] = "";
+    DIR *dir = opendir(new_dir_path);
+    struct dirent *entry;
+    if (dir != NULL) {
+        while ((entry = readdir(dir)) != NULL) {
+            if (strstr(entry->d_name, ".pdf") != NULL) {
+                strcat(pdf_files, entry->d_name);
+                strcat(pdf_files, "\n");
+            }
+        }
+        closedir(dir);
+    }
+
+    printf("%s\n",pdf_files);
+    send(client_sock, pdf_files, strlen(pdf_files), 0);
 }
 
 

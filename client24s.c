@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <dirent.h>
 
 #define PORT 8080
 #define BUFSIZE 1024
@@ -131,7 +132,6 @@ void process_command(int sock, char *input) {
     }
 
     if (token_count == 0) {
-        printf("Invalid command\n");
         return;
     }
 
@@ -154,7 +154,7 @@ void process_command(int sock, char *input) {
 }
 
 // Handle ufile command
-void handle_ufile(int sock, char *tokens[]) {
+void handle_ufile(int sock, char *tokens[]) { 
     char buffer[BUFSIZE];
 
     if (!tokens[1] || !tokens[2]) {
@@ -333,7 +333,44 @@ void handle_dtar(int sock, char *tokens[]) {
 }
 
 // Handle display command
-void handle_display(int sock, char *tokens[]) {
-    printf("display command received\n");
-    // Implement display logic here
+void handle_display(int sock, char *tokens[]) {  
+    char command[BUFSIZE];
+    char buffer[BUFSIZE];
+
+    // Check if the pathname is provided
+    if (tokens[1] == NULL) {
+        printf("Invalid command: Pathname not provided.\n");
+        return;
+    } else if (strncmp(tokens[1], "~/smain/", 8) != 0) {
+        printf("Error: Destination path must start with '~/smain/'\n");
+        return;
+    }
+
+    // Form the display command with the given pathname
+    snprintf(command, sizeof(command), "display %s", tokens[1]);
+
+    // Send the command to the server
+    if (send(sock, command, strlen(command), 0) < 0) {
+        perror("Failed to send command to server");
+        return;
+    }
+
+    // Receive the server's response containing the list of file names
+    ssize_t bytes_received = recv(sock, buffer, sizeof(buffer) - 1, 0);
+    if (bytes_received < 0) {
+        perror("Error receiving data from server");
+        return;
+    }
+    buffer[bytes_received] = '\0';  // Null-terminate the received data
+
+
+    // Check if the response is an error message
+    const char *error_prefix = "ERROR:";
+    if (strncmp(buffer, error_prefix, strlen(error_prefix)) == 0) {
+        printf("Server: %s\n", buffer);
+        return;
+    }else{
+        // Print the list of file names received from the server
+        printf("\nFile names:\n%s\n", buffer);
+    }
 }

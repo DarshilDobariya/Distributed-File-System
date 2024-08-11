@@ -229,6 +229,7 @@ void handle_rmfile(int client_sock, char *command) {
             send(client_sock, success_message, strlen(success_message), 0);
             return;
         }
+
         // if exist then delete
         if (delete_file(new_file_path) != 0) {
             // Send rejction to the client
@@ -244,24 +245,31 @@ void handle_rmfile(int client_sock, char *command) {
     }else{
         // Send rejction to the client
         const char *success_message = "ERROR: File remove Failed!";
+        printf("%s\n",success_message);
         send(client_sock, success_message, strlen(success_message), 0);
     }
 }
 
+// Function to handle the 'dtar' command from the client(Smain)
 void handle_dtar(int client_sock, char *command) {
     char path[BUFSIZE];
-    // Placeholder for 'dtar' command
-    printf("Handling 'dtar' command: %s\n", command);
-
+    // Extract the file path from the command using sscanf
     sscanf(command, "dtar %s", path);
-    printf("Creating tarball: %s\n", path);
 
     // Create a new file path by modifying the file path(Replace smain with spdf)
     char *new_file_path = create_pdf_path(path);
-    printf("New file path: %s\n", new_file_path);
 
+    // Check if the full_path exists and is a directory
+    struct stat path_stat;
+    if (stat(new_file_path, &path_stat) != 0 || !S_ISDIR(path_stat.st_mode)) {
+        // If the path doesn't exist or isn't a directory, inform the client(Smain) and exit the function
+        printf("ERROR: Server directory does not exist, expected : %s\n", new_file_path);
+        const char *error_message = "ERROR: Server directory does not exist!";
+        send(client_sock, error_message, strlen(error_message), 0);
+        return;
+    }
+    // If the path is valid, create a tarball of .pdf files and send it to the client(Smain)
     pdf_tar_file(client_sock,new_file_path);
-
 }
 
 // function to handle the 'display' command
@@ -433,14 +441,20 @@ void send_file_back_to_smain(int smain_sock, const char *file_path, const char *
     }
 }
 
+// Function to create a tarball of .txt files and send it to the client
 void pdf_tar_file(int client_sock, const char *path) {
+    // variables to hold the command for creating the tarball and the target path
     char tar_cmd[BUFSIZE];
     char target_path[BUFSIZE];
+
+    // Create path for the tarball file, which will be stored in the given path
     snprintf(target_path,sizeof(target_path), "%s/%s",path,TAR_FILE_PATH);
     
     // Check for the presence of .pdf files first
     snprintf(tar_cmd, sizeof(tar_cmd), "find %s -name '*.pdf' -print -quit", path);
+    // Run the command to check for .pdf files and store the result
     FILE *check = popen(tar_cmd, "r");
+    // If the check command fails, inform the client(Smain) and exit the function
     if (check == NULL) {
         printf("ERROR: Failed to check for .pdf files.\n");
         const char *error_message = "ERROR: Failed to check for .pdf files!";
@@ -448,7 +462,7 @@ void pdf_tar_file(int client_sock, const char *path) {
         return;
     }
 
-    // If no .pdf files found, send error to client
+    // If no .pdf files found, send error to client(Smain)
     if (fgetc(check) == EOF) {
         printf("No .pdf files found.\n");
         const char *error_message = "ERROR: No .pdf files found!";
@@ -461,6 +475,7 @@ void pdf_tar_file(int client_sock, const char *path) {
     // Create the tarball if .pdf files are found
     snprintf(tar_cmd, sizeof(tar_cmd), "find %s -name '*.pdf' -print0 | tar -cf %s --null -T - 2>/dev/null", path, target_path);
     int result = system(tar_cmd);
+    // If the tarball creation fails, inform the client(Smain) and exit the function
     if (result != 0) {
         printf("ERROR: Failed to create tarball for .pdf files.\n");
         const char *error_message = "ERROR: Tar file creation failed!";
@@ -472,7 +487,7 @@ void pdf_tar_file(int client_sock, const char *path) {
     send(client_sock, TAR_FILE_PATH, strlen(TAR_FILE_PATH), 0);
 
 
-    // Check if the tarball file exists
+    // Check if the tarball file was successfully created
     if (access(target_path, F_OK) != 0) {
         printf("No .pdf files found or failed to create tarball.\n");
         // Send rejction to the client
@@ -481,8 +496,9 @@ void pdf_tar_file(int client_sock, const char *path) {
         return;
     }
 
-    // Send tarball to client
+    // Open the tarball file to read its contents
     FILE *tarball = fopen(target_path, "rb");
+    // If the tarball file cannot be opened, inform the client(Smain)
     if (tarball == NULL) {
         printf("Failed to open tarball file.\n");
         // Send rejction to the client
@@ -513,7 +529,6 @@ void pdf_tar_file(int client_sock, const char *path) {
     fclose(tarball);
     printf("Tarball sent to Smain.\n");
 }
-
 
 // helper function to create path for text sercer by replacing smain to stext
 char* create_pdf_path(const char *destination_path) {

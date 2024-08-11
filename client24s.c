@@ -83,58 +83,6 @@ int is_valid_extension(const char *filename) {
     return strcmp(ext, ".c") == 0 || strcmp(ext, ".pdf") == 0 || strcmp(ext, ".txt") == 0;
 }
 
-// Function to send a file to the server along with the command
-void send_file(int sock, char *filename, char *destination_path) {
-    // Buffer to hold file content during transmission
-    char buffer[BUFSIZE];
-    int file_fd;
-    // Variable to store the number of bytes read from the file
-    ssize_t bytes_read;
-    // Variable to store the total size of the file
-    size_t total_size;
-
-    // Open the file
-    file_fd = open(filename, O_RDONLY);
-    if (file_fd < 0) {
-        // Check if file opening failed
-        perror("File open failed");
-        return;
-    }
-
-    // Determine the size of the file by moving the file pointer to the end
-    total_size = lseek(file_fd, 0, SEEK_END);
-    // Reset the file pointer to the beginning
-    lseek(file_fd, 0, SEEK_SET);
-
-    // Allocate memory for the entire message
-    char *message = malloc(total_size + BUFSIZE + strlen(CMD_END_MARKER) + 1);
-    if (message == NULL) {
-        // Check if memory allocation failed
-        perror("Memory allocation failed");
-        close(file_fd);
-        return;
-    }
-
-    // Build the command string
-    snprintf(message, total_size + BUFSIZE + strlen(CMD_END_MARKER) + 1, "ufile %s %s %s", filename, destination_path, CMD_END_MARKER);
-
-    // Append the file content to the command string
-    ssize_t message_len = strlen(message);
-    while ((bytes_read = read(file_fd, buffer, BUFSIZE)) > 0) {
-        // Copy the chunk into the message
-        memcpy(message + message_len, buffer, bytes_read);
-         // Update the total length of the message
-        message_len += bytes_read;
-    }
-
-    // Send the entire message (command + file content) to the server
-    send(sock, message, message_len, 0);
-
-    // Clean up: free the allocated memory and close the file
-    free(message);
-    close(file_fd);
-}
-
 // Function to process the user's input and determine the appropriate action
 void process_command(int sock, char *input) {
     // Array to hold the tokens (words) of the command
@@ -149,43 +97,49 @@ void process_command(int sock, char *input) {
         token = strtok(NULL, " \n");
     }
 
-    // If no tokens were found, return early
+    // If no tokens were found(Empty input), return early
     if (token_count == 0) {
         return;
     }
 
     // Determine the command from the first token and call the appropriate handler function
     if (strcmp(tokens[0], "ufile") == 0) {
+        // check token count for ufile
         if(token_count != 3){
             printf("ERROR: Invalid Synopsis for %s.\n",tokens[0]);
             return;
         }
         handle_ufile(sock, tokens);
     } else if (strcmp(tokens[0], "dfile") == 0) {
+        // check token count for dfile
         if(token_count != 2){
             printf("ERROR: Invalid Synopsis for %s.\n",tokens[0]);
             return;
         }
         handle_dfile(sock, tokens);
     } else if (strcmp(tokens[0], "rmfile") == 0) {
+        // check token count for rmfile
         if(token_count != 2){
             printf("ERROR: Invalid Synopsis for %s.\n",tokens[0]);
             return;
         }
         handle_rmfile(sock, tokens);
     } else if (strcmp(tokens[0], "dtar") == 0) {
+        // check token count for dtar
         if(token_count != 2){
             printf("ERROR: Invalid Synopsis for %s.\n",tokens[0]);
             return;
         }
         handle_dtar(sock, tokens);
     } else if (strcmp(tokens[0], "display") == 0) {
+        // check token count for display
         if(token_count != 2){
             printf("ERROR: Invalid Synopsis for %s.\n",tokens[0]);
             return;
         }
         handle_display(sock, tokens);
     } else {
+        // handle invalid command
         printf("ERROR: Invalid command\n");
     }
 }
@@ -385,21 +339,22 @@ void handle_dtar(int sock, char *tokens[]) {
     // buffer to send to Smain
     char command[BUFSIZE];
 
-    // check if
+    // Check if the file extension is provided
     if (!tokens[1]) {
         printf("Error: Missing extenion for dtar.\n");
         return;
     }
     
-    // store extension to pointer
+    // Store the extension provided by the user in a pointer variable
     char *ext = tokens[1];
-    // check if extension is valid or not and print error accordingly
+
+    // Check if the provided extension is valid
     if(!is_valid_extension(ext)){
         printf("Error: Invalid file extension.\n");
         return;
     }
 
-    // Form the dtar command with the given pathname
+    // Form the dtar command using the provided file extension
     snprintf(command, sizeof(command), "dtar %s", tokens[1]);
 
     // Send the command to the server
@@ -408,11 +363,11 @@ void handle_dtar(int sock, char *tokens[]) {
         return;
     }
 
-    // Receive the tar file name
+    // Buffer to receive the tar file name from the server
     char buff_name[BUFSIZE];
     ssize_t bytes_received = recv(sock, buff_name, sizeof(buff_name) - 1, 0);
     if (bytes_received < 0) {
-        // if file name is empty.
+        // Check if the tar file name was received successfully
         perror("Error receiving file name");
         return;
     }
@@ -440,23 +395,24 @@ void handle_dtar(int sock, char *tokens[]) {
         // Write received data to file
         fwrite(buffer_data, 1, bytes_received, fp);
 
-        // Check for end marker
+        // Check if the received data is the end marker indicating the end of transmission
         if (bytes_received < BUFSIZE) {
-            // Partial read; check for end marker
+            // If the received data is less than the buffer size, check for the end marker
             buffer_data[bytes_received] = '\0'; // Null-terminate the buffer_data
             if (strstr(buffer_data, "END_CMD")) {
                 break;
             }
         }
     }
-
+    // Check if there was an error while receiving data from the server
     if (bytes_received < 0) {
         perror("Failed to receive data from server");
+    }else{
+        printf("File received and saved as %s\n", buff_name);
     }
 
     // Close the file
     fclose(fp);
-    printf("File received and saved as %s\n", buff_name);
 }
 
 // Handle display command
@@ -500,4 +456,57 @@ void handle_display(int sock, char *tokens[]) {
         // Print the list of file names received from the server
         printf("\nFile names:\n%s\n", buffer);
     }
+}
+
+
+// Function to send a file to the server along with the command
+void send_file(int sock, char *filename, char *destination_path) {
+    // Buffer to hold file content during transmission
+    char buffer[BUFSIZE];
+    int file_fd;
+    // Variable to store the number of bytes read from the file
+    ssize_t bytes_read;
+    // Variable to store the total size of the file
+    size_t total_size;
+
+    // Open the file
+    file_fd = open(filename, O_RDONLY);
+    if (file_fd < 0) {
+        // Check if file opening failed
+        perror("File open failed");
+        return;
+    }
+
+    // Determine the size of the file by moving the file pointer to the end
+    total_size = lseek(file_fd, 0, SEEK_END);
+    // Reset the file pointer to the beginning
+    lseek(file_fd, 0, SEEK_SET);
+
+    // Allocate memory for the entire message
+    char *message = malloc(total_size + BUFSIZE + strlen(CMD_END_MARKER) + 1);
+    if (message == NULL) {
+        // Check if memory allocation failed
+        perror("Memory allocation failed");
+        close(file_fd);
+        return;
+    }
+
+    // Build the command string
+    snprintf(message, total_size + BUFSIZE + strlen(CMD_END_MARKER) + 1, "ufile %s %s %s", filename, destination_path, CMD_END_MARKER);
+
+    // Append the file content to the command string
+    ssize_t message_len = strlen(message);
+    while ((bytes_read = read(file_fd, buffer, BUFSIZE)) > 0) {
+        // Copy the chunk into the message
+        memcpy(message + message_len, buffer, bytes_read);
+         // Update the total length of the message
+        message_len += bytes_read;
+    }
+
+    // Send the entire message (command + file content) to the server
+    send(sock, message, message_len, 0);
+
+    // Clean up: free the allocated memory and close the file
+    free(message);
+    close(file_fd);
 }

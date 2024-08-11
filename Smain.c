@@ -362,23 +362,26 @@ void handle_rmfile(int client_sock, char *command) {
     }
 }
 
-// Function to handle 'dtar' command
+// Function to handle 'dtar' command from client
 void handle_dtar(int client_sock, char *command) {
+    // variable to store the file extension
     char ext[10];
+    // store the server socket connection
     int server_sock;
+    // Extract the file extension from the command 
     sscanf(command, "dtar %s", ext);
-    printf("Creating tarball: %s\n", ext);
 
     // Define the path to be searched
     const char *home_dir = getenv("HOME");
     if (home_dir == NULL) {
+        // Print an error message if the home directory couldn't be found
         fprintf(stderr, "Failed to get HOME environment variable\n");
         return;
     }
+    // Define the full path to the directory that will be searched 
     char full_path[512];
     snprintf(full_path, sizeof(full_path), "%s/smain", home_dir);
 
-    printf("full path: %s\n",full_path);
 
     // Check if the file has a .pdf extension
     if (strcmp(ext, ".pdf") == 0) {
@@ -389,7 +392,7 @@ void handle_dtar(int client_sock, char *command) {
             printf("Failed to connect to Spdf server\n");
             return;
         }
-
+        // Send Request to the server to create a tarball and send it back and forward to client
         request_tar_file(server_sock,client_sock,full_path);
         close(server_sock);
 
@@ -402,14 +405,27 @@ void handle_dtar(int client_sock, char *command) {
             printf("Failed to connect to Stext server\n");
             return;
         }
+        // Send Request to the server to create a tarball and send it back and forward to client
         request_tar_file(server_sock,client_sock,full_path);
         close(server_sock);
 
     // Check if the file has a .c extension
     }else if (strcmp(ext, ".c") == 0) {
+        // Check if the full_path exists and is a directory
+        struct stat path_stat;
+        if (stat(full_path, &path_stat) != 0 || !S_ISDIR(path_stat.st_mode)) {
+            // Print an error message if the directory doesn't exist
+            printf("ERROR: Server directory does not exist, expected : %s\n", full_path);
+            // Send an error message to the client
+            const char *error_message = "ERROR: Server directory does not exist!";
+            send(client_sock, error_message, strlen(error_message), 0);
+            return;
+        }
+        // Create a tarball of the ".c" files and send it to the client
         c_tar_file(client_sock, full_path);
-    // Handle unsupported file types
+
     } else {
+        // Print a message indicating that the file extension is not supported
         printf("Unsupported extention: %s\n", ext);
     }
 }
@@ -962,15 +978,20 @@ void get_file_names_from_server(int (*connect_func)(), const char *message, cons
 }
 
 
-// Function to create a tarball of .c files and send it to the client
+// Helper Function to create a tarball of .c files and send it to the client
 void c_tar_file(int client_sock, const char *path) {
+    // variables to hold the command for creating the tarball and the target path
     char tar_cmd[BUFSIZE];
     char target_path[BUFSIZE];
+
+    // Create the full path for the tarball file, which will be stored in the given path
     snprintf(target_path,sizeof(target_path), "%s/%s",path,TAR_FILE_PATH);
 
     // Check for the presence of .c files first
     snprintf(tar_cmd, sizeof(tar_cmd), "find %s -name '*.c' -print -quit", path);
+    // Run the command to check for .c files and store the result
     FILE *check = popen(tar_cmd, "r");
+    // If the check command fails, inform the client and exit the function
     if (check == NULL) {
         printf("ERROR: Failed to check for .c files.\n");
         const char *error_message = "ERROR: Failed to check for .c files!";
@@ -978,7 +999,7 @@ void c_tar_file(int client_sock, const char *path) {
         return;
     }
 
-    // If no .c files found, send error to client
+    // If no .c files are found, inform the client and exit the function
     if (fgetc(check) == EOF) {
         printf("No .c files found.\n");
         const char *error_message = "ERROR: No .c files found!";
@@ -986,11 +1007,14 @@ void c_tar_file(int client_sock, const char *path) {
         pclose(check);
         return;
     }
+    // Close the check command as .c files were found
     pclose(check);
 
-    // Create the tarball if .c files are found
+    // If .c files are found, create the tarball using the find command and tar command
     snprintf(tar_cmd, sizeof(tar_cmd), "find %s -name '*.c' -print0 | tar -cf %s --null -T - 2>/dev/null", path, target_path);
+    // Run the command to create the tarball
     int result = system(tar_cmd);
+    // If the tarball creation fails, inform the client and exit the function
     if (result != 0) {
         printf("ERROR: Failed to create tarball for .c files.\n");
         const char *error_message = "ERROR: Tar file creation failed!";
@@ -998,33 +1022,37 @@ void c_tar_file(int client_sock, const char *path) {
         return;
     }
 
-    // send filename to client
+    // send tar filename to client
     send(client_sock, TAR_FILE_PATH, strlen(TAR_FILE_PATH), 0);
 
-    // Check if the tarball file exists
+    // Check if the tarball file was successfully created
     if (access(target_path, F_OK) != 0) {
-        printf("No .c files found or failed to create tarball.\n");
         // Send rejction to the client
         const char *success_message = "ERROR: Tar file creation failed!";
+        printf("%s\n",success_message);
         send(client_sock, success_message, strlen(success_message), 0);
         return;
     }
 
-    // Send tarball to client
+    // Open the tarball file to read its contents
     FILE *tarball = fopen(target_path, "rb");
     if (tarball == NULL) {
-        printf("Failed to open tarball file.\n");
+        // If the tarball file cannot be opened
+        printf("ERROR: Failed to open tarball file.\n");
         // Send rejction to the client
         const char *success_message = "ERROR: Tar file creation failed!";
         send(client_sock, success_message, strlen(success_message), 0);
         return;
     }
 
-    // Send the file content
+    // Declare a buffer to hold the file content as it is read
     char file_buffer[1024];
     size_t bytes_read;
+    // Read the tarball file and send its contents to the client
     while ((bytes_read = fread(file_buffer, 1, sizeof(file_buffer), tarball)) > 0) {
+        // Send the read data to the client
         ssize_t bytes_sent = send(client_sock, file_buffer, bytes_read, 0);
+        // If sending the data fails, inform the client and exit the function
         if (bytes_sent < 0) {
             perror("Failed to send tarball data");
             // Send rejction to the client
@@ -1035,22 +1063,19 @@ void c_tar_file(int client_sock, const char *path) {
         }
     }
 
-    // Send end-of-file marker
+    // Send an end-of-file marker to signal the end of the file content
     const char *end_marker = "END_CMD";
     send(client_sock, end_marker, strlen(end_marker), 0);
-
+    // Close the tarball file after sending its contents
     fclose(tarball);
     printf("Tarball sent to client.\n");
 }
 
+// Function to request a tarball file from a server and forward it to the client
 void request_tar_file(int server_sock, int client_sock, char *path){
-    printf("path: %s\n",path);
-    
     // Construct the message to send to the server, including the command and server path
     char message[BUFSIZE];
     snprintf(message, sizeof(message), "dtar %s", path);
-
-    printf("message: %s\n",message);
 
     // Send the message to the server
     if (send(server_sock, message, strlen(message), 0) == -1) {
@@ -1062,27 +1087,29 @@ void request_tar_file(int server_sock, int client_sock, char *path){
     // Receive the file name from the server
     char file_name[256];
     ssize_t bytes_received = recv(server_sock, file_name, sizeof(file_name) - 1, 0);
+    // If receiving the file name fails, print an error message and exit
     if (bytes_received <= 0) {
         // Print an error message if receiving the file name fails
         perror("Error receiving file name");
         return;
     }
-    // Null-terminate the file name
+    // Null-terminate the received file name string
     file_name[bytes_received] = '\0'; 
+
     //send the file name to the client
     if (send(client_sock, file_name, strlen(file_name), 0) == -1) {
         // Print an error message if sending the file name to the client fails
         perror("send");
     }
 
-
-    // Receive the file content from the server and forward it to the client
+    // buffer to hold the file content received from the server
     char buffer_data[BUFSIZE];
     ssize_t content_received;
-    // Keep receiving content until there's no more left to receive
+    // Keep receiving file content from the server and forward it to the client
     while ((content_received = recv(server_sock, buffer_data, sizeof(buffer_data), 0)) > 0) {
-        // Forward the received content to the client
+        // Send the received content to the client
         ssize_t bytes_sent = send(client_sock, buffer_data, content_received, 0);
+        // If sending the content fails, print an error message and exit
         if (bytes_sent < 0) {
             // Print an error message if forwarding fails
             perror("send");
@@ -1097,10 +1124,12 @@ void request_tar_file(int server_sock, int client_sock, char *path){
             }
         }
     }
+    // If receiving the content fails, print an error message
     if (content_received < 0) {
         // Print an error message if there was an issue receiving the file content
         perror("Error receiving file content");
     }else{
-        printf("%s received and send to client.\n",file_name);
+        // Print a message indicating that the file was successfully received and forwarded to the client
+        printf("'%s' received and send to client.\n",file_name);
     }
 }

@@ -335,21 +335,29 @@ void handle_rmfile(int sock, char *tokens[]) {
 }
 
 // Handle dtar command
-void handle_dtar(int sock, char *tokens[]) {
+void handle_dtar(int sock, char *tokens[])
+{
     // buffer to send to Smain
     char command[BUFSIZE];
 
     // Check if the file extension is provided
-    if (!tokens[1]) {
+    if (!tokens[1])
+    {
         printf("Error: Missing extenion for dtar.\n");
         return;
     }
-    
+    // Check if the token is a valid extension (e.g., only ".c")
+    if (tokens[1][0] != '.' || strchr(tokens[1] + 1, '.') != NULL || strlen(tokens[1]) <= 1)
+    {
+        printf("Error: Invalid extension format. Only an extension (e.g., '.c') should be provided.\n");
+        return;
+    }
     // Store the extension provided by the user in a pointer variable
     char *ext = tokens[1];
 
     // Check if the provided extension is valid
-    if(!is_valid_extension(ext)){
+    if (!is_valid_extension(ext))
+    {
         printf("Error: Invalid file extension.\n");
         return;
     }

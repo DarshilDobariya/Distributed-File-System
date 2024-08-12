@@ -11,7 +11,7 @@
 #include <errno.h>
 #include <dirent.h>
 
-#define PORT 8080
+#define PORT 7501
 #define BUFSIZE 1024
 #define MAX_TOKENS 10
 // Marker to indicate the end of the command
@@ -362,7 +362,7 @@ void handle_dtar(int sock, char *tokens[]) {
         perror("Failed to send command to server");
         return;
     }
-
+    
     // Buffer to receive the tar file name from the server
     char buff_name[BUFSIZE];
     ssize_t bytes_received = recv(sock, buff_name, sizeof(buff_name) - 1, 0);
@@ -372,7 +372,7 @@ void handle_dtar(int sock, char *tokens[]) {
         return;
     }
     buff_name[bytes_received] = '\0';
-
+ 
     // Check if the first response is an error message and print appropriate message
     const char *error_prefix = "ERROR:";
     if (strncmp(buff_name, error_prefix, strlen(error_prefix)) == 0) {

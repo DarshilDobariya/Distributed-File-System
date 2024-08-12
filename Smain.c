@@ -13,7 +13,7 @@
 #include <dirent.h>
 
 
-#define PORT 8080
+#define PORT 7501
 #define BUFSIZE 1024
 #define CMD_END_MARKER "END_CMD"
 #define TAR_FILE_PATH "c_files.tar"
@@ -426,7 +426,9 @@ void handle_dtar(int client_sock, char *command) {
 
     } else {
         // Print a message indicating that the file extension is not supported
-        printf("Unsupported extention: %s\n", ext);
+        const char *success_message = "ERROR: Invalid Extention Format!";
+        send(client_sock, success_message, strlen(success_message), 0);
+        return;
     }
 }
 

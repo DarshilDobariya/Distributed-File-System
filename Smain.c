@@ -13,8 +13,8 @@
 #include <dirent.h>
 
 
-#define PORT 7501
-#define BUFSIZE 1024
+#define PORT 8080
+#define BUFSIZE 102400
 #define CMD_END_MARKER "END_CMD"
 #define TAR_FILE_PATH "c_files.tar"
 
@@ -121,7 +121,7 @@ void prcclient(int client_sock) {
     while ((bytes_read = recv(client_sock, buffer, BUFSIZE, 0)) > 0) {
         // Null-terminate the received string to prevent buffer overflow
         buffer[bytes_read] = '\0';
-        printf("Received command: %s\n", buffer);  // Print the received command
+
 
         // Check if the received message contains file data after the command
         char *file_data = strstr(buffer, "END_CMD");
@@ -131,26 +131,28 @@ void prcclient(int client_sock) {
             // Move the pointer past the "END_CMD" marker to get to the file data
             file_data += strlen("END_CMD");
         }
-
+        
         // Determine which command the client sent and call the appropriate function to handle it
         if (strncmp(buffer, "ufile", 5) == 0) {
             // Handle the 'ufile' command, which uploads a file
+            printf("File Upload request\n");
             handle_ufile(client_sock, buffer, file_data);
         } else if (strncmp(buffer, "dfile", 5) == 0) {
             // Handle the 'dfile' command, which downloads a file
+            printf("File download request\n");
             handle_dfile(client_sock, buffer);
         } else if (strncmp(buffer, "rmfile", 6) == 0) {
             // Handle the 'rmfile' command, which removes a file
+            printf("File remove request\n");
             handle_rmfile(client_sock, buffer);
         } else if (strncmp(buffer, "dtar", 4) == 0) {
             // Handle the 'dtar' command, which download file of given extension to Tar
+            printf("TarFile download request\n");
             handle_dtar(client_sock, buffer);
         } else if (strncmp(buffer, "display", 7) == 0) {
             // Handle the 'display' command, which shows files in a directory
+            printf("Display Files request\n");
             handle_display(client_sock, buffer);
-        } else {
-            // If the command is unknown, print an error message
-            printf("Unknown command: %s\n", buffer);
         }
     }
 }
@@ -168,6 +170,7 @@ int is_valid_path(const char *path) {
 void handle_ufile(int client_sock, char *command, char *file_data) {
     char filename[256], destination_path[256];
     int server_sock;
+    char *f_name;
 
     // Extract filename and destination path from the command
     if (sscanf(command, "ufile %s %s", filename, destination_path) != 2) {
@@ -175,6 +178,13 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
         printf("Command parsing failed\n");
         send(client_sock, "File upload failed", 18, 0);
         return;
+    }
+    // extract file name if subdirectory is also given
+    if(strstr(filename,"/") != NULL){
+        // Extract the file name
+        f_name = strrchr(filename, '/') + 1;
+    }else{
+        f_name = filename;
     }
 
     // Check if the file is a PDF
@@ -188,7 +198,7 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
             return;
         }
         // Send the file to the Spdf server
-        send_file_to_server(server_sock, client_sock, "ufile", filename, destination_path, file_data);
+        send_file_to_server(server_sock, client_sock, "ufile", f_name, destination_path, file_data);
         close(server_sock);
 
     // Check if the file is a text file
@@ -202,19 +212,21 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
             return;
         }
         // Send the file to the Stext server
-        send_file_to_server(server_sock, client_sock, "ufile", filename, destination_path, file_data);
+        send_file_to_server(server_sock, client_sock, "ufile", f_name, destination_path, file_data);
         close(server_sock);
 
     // Check if the file is a C file
     } else if (strstr(filename, ".c") != NULL) {
         // upload by Smain
-        if (receive_and_save_file(client_sock, destination_path, filename, file_data) == 0) {
+        if (receive_and_save_file(client_sock, destination_path, f_name, file_data) == 0) {
             // Notify the client that the file upload was successful
             const char *success_message = "File Uploaded successfully.";
+            printf("%s\n",success_message);
             send(client_sock, success_message, strlen(success_message), 0);
         } else {
             // Notify the client that the file upload failed
             const char *failed_message = "File uploading failed!";
+            printf("%s\n",failed_message);
             send(client_sock, failed_message, strlen(failed_message), 0);
         }
     } else {
@@ -336,17 +348,16 @@ void handle_rmfile(int client_sock, char *command) {
 
     // Check if the file has a .c extension
     } else if (strstr(file_name, ".c") != NULL) {
-        // check if file exist or not
-        if (access(file_path, F_OK) == -1) {
-            // Send rejction to the client
-            const char *success_message = "File not found!";
-            send(client_sock, success_message, strlen(success_message), 0);
-            return;
-        }
         // Delete the .c file by Smain
-        if (delete_file(file_path) == 0) {
+        int result = delete_file(file_path);
+        if (result == 0) {
             // Send confirmation to the client
             const char *success_message = "File has been removed!";
+            printf("%s\n",success_message);
+            send(client_sock, success_message, strlen(success_message), 0);
+        }else if (result == 2){
+            // Send rejction to the client
+            const char *success_message = "File not found!";
             printf("%s\n",success_message);
             send(client_sock, success_message, strlen(success_message), 0);
         }else{
@@ -517,12 +528,12 @@ void handle_display(int client_sock, char *command) {
 
     // If no files were found, send an error message to the client
     if(strlen(combined_list) == 0){
-        printf("Directory doesnot exist or No files, from Spdf and Stext...\n");
-        const char *error_message = "ERROR: Directory doesnot exist or No files found!";
+        const char *error_message = "ERROR: No files found or given path doesnot exist!";
+        printf("%s\n",error_message);
         send(client_sock, error_message, strlen(error_message), 0);
     }else{
         // print and send the list of files to the client
-        printf("All files: \n%s",combined_list);
+        printf("List of files has been sent to Client\n");
         send(client_sock,combined_list,strlen(combined_list),0);
     }
     
@@ -638,6 +649,7 @@ void send_file_to_server(int server_sock, int client_sock, char *command, char *
     strcat(complete_message, file_data);
 
     // Send the complete message (command, full path, and file data in one go)
+    printf("Sending request to server...\n");
     bytes_sent = send(server_sock, complete_message, total_length - 1, 0); // -1 to exclude the null terminator
     if (bytes_sent < 0) {
         // Print an error message if sending fails
@@ -650,6 +662,7 @@ void send_file_to_server(int server_sock, int client_sock, char *command, char *
     if (bytes_received > 0) {
         // Null-terminate the received data to make it a valid string
         recv_buffer[bytes_received] = '\0';
+        printf("Server Responce: %s\nforwarding responce to client\n",recv_buffer);
         // Forward the server response to the client
         if (send(client_sock, recv_buffer, bytes_received, 0) < 0) {
             // Print an error message if forwarding to the client fails
@@ -750,6 +763,7 @@ void remove_file_from_server(int sock, int client_sock, char *command, char *des
     snprintf(message, sizeof(message), "%s %s", command, full_path);
     
     // Send the message to the server
+    printf("Sending request to server...\n");
     if (send(sock, message, strlen(message), 0) == -1) {
         // Print an error message if sending fails
         perror("send");
@@ -761,6 +775,7 @@ void remove_file_from_server(int sock, int client_sock, char *command, char *des
     if (bytes_received > 0) {
         //  Null-terminate the received data to make it a valid string
         recv_buffer[bytes_received] = '\0';
+        printf("Server Responce: %s\nforwarding responce to client\n",recv_buffer);
         // Forward the server's response to the client
         if (send(client_sock, recv_buffer, bytes_received, 0) < 0) {
             // Print an error message if forwarding to the client fails
@@ -794,10 +809,13 @@ int delete_file(const char *file_path) {
         full_path[sizeof(full_path) - 1] = '\0';
     }
 
+    // check if file exist or not
+    if (access(full_path, F_OK) == -1) {
+        return 2;
+    }
+
     // delete the file at the specified path
     if (unlink(full_path) == 0) {
-        // Print a success message if the file was deleted successfully
-        printf("Successfully deleted file: %s\n", full_path);
         return 0;
     } else {
         // Handle different errors that could occur during file deletion
@@ -840,6 +858,7 @@ void send_file_to_client(int client_sock, const char *file_path, const char *fil
         perror("File open failed");
         // Send rejction to the client
         const char *success_message = "ERROR: File not found!";
+        printf("%s\n",success_message);
         send(client_sock, success_message, strlen(success_message), 0);
         return;
     }
@@ -851,8 +870,6 @@ void send_file_to_client(int client_sock, const char *file_path, const char *fil
     char buffer_content[BUFSIZE];
     ssize_t bytes_read,bytes_sent;
     while ((bytes_read = read(file_fd, buffer_content, sizeof(buffer_content))) > 0) {
-        // Debug print: show the content being sent
-        printf("Read %zd bytes: %.*s\n", bytes_read, (int)bytes_read, buffer_content);
         bytes_sent = send(client_sock, buffer_content, bytes_read, 0);
         if (bytes_sent < 0) {
             perror("Error sending file");
@@ -892,6 +909,7 @@ void send_download_request(int server_sock, int client_sock, char *command, char
     snprintf(message, sizeof(message), "%s %s", command, full_path);
     
     // Send the message to the server
+    printf("Sending download request to server..\n");
     if (send(server_sock, message, strlen(message), 0) == -1) {
         // Print an error message if sending fails
         perror("send");
@@ -921,9 +939,6 @@ void send_download_request(int server_sock, int client_sock, char *command, char
     ssize_t content_received;
     // Keep receiving content until there's no more left to receive
     while ((content_received = recv(server_sock, buffer, sizeof(buffer), 0)) > 0) {
-        // Debug print: Show the content being received
-        printf("Received %zd bytes of content\n", content_received);
-
         // Forward the received content to the client
         ssize_t bytes_sent = send(client_sock, buffer, content_received, 0);
         if (bytes_sent < 0) {
@@ -943,7 +958,7 @@ void send_download_request(int server_sock, int client_sock, char *command, char
     if (content_received < 0) {
         // Print an error message if there was an issue receiving the file content
         perror("Error receiving file content");
-    }    
+    }
 }
 
 
@@ -1080,6 +1095,7 @@ void request_tar_file(int server_sock, int client_sock, char *path){
     snprintf(message, sizeof(message), "dtar %s", path);
 
     // Send the message to the server
+    printf("Sending tar file download request to server\n");
     if (send(server_sock, message, strlen(message), 0) == -1) {
         // Print an error message if sending fails
         perror("send");

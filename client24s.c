@@ -11,7 +11,7 @@
 #include <errno.h>
 #include <dirent.h>
 
-#define PORT 7501
+#define PORT 8080
 #define BUFSIZE 1024
 #define MAX_TOKENS 10
 // Marker to indicate the end of the command
@@ -454,7 +454,7 @@ void handle_display(int sock, char *tokens[]) {
         return;
     }else{
         // Print the list of file names received from the server
-        printf("\nFile names:\n%s\n", buffer);
+        printf("Server:\n%s\n", buffer);
     }
 }
 

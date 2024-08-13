@@ -14,7 +14,7 @@
 
 // Define constants for the port number and buffer size
 #define PORT 8082
-#define BUFSIZE 1024
+#define BUFSIZE 102400
 #define CMD_END_MARKER "END_CMD"
 #define TAR_FILE_PATH "text_files.tar"
 
@@ -45,7 +45,6 @@ void handle_client(int client_sock) {
     bytes_received = recv(client_sock, buffer, sizeof(buffer) - 1, 0);
     if (bytes_received > 0) {
         buffer[bytes_received] = '\0'; // Null-terminate the received data
-        printf("Combined message received: %s\n", buffer);
 
         // Determine which command was sent by the client and handle it accordingly
         if (strncmp(buffer, "ufile", 5) == 0) {
@@ -60,19 +59,24 @@ void handle_client(int client_sock) {
             // Extract the file data
             file_data = delimiter + 1;
             // Handle the 'ufile' command, which uploads a file
+            printf("File Upload request\n");
             handle_ufile(client_sock, buffer, file_data);
 
         } else if (strncmp(buffer, "dfile", 5) == 0) {
             // Handle the 'dfile' command, which downloads a file
+            printf("File download request\n");
             handle_dfile(client_sock, buffer);
         } else if (strncmp(buffer, "rmfile", 6) == 0) {
             // Handle the 'rmfile' command, which removes a file
+            printf("File remove request\n");
             handle_rmfile(client_sock, buffer);
         } else if (strncmp(buffer, "dtar", 4) == 0) {
             // Handle the 'dtar' command, which download file of given extension to Tar
+            printf("TarFile download request\n");
             handle_dtar(client_sock, buffer);
         } else if (strncmp(buffer, "display", 7) == 0) {
             // Handle the 'display' command, which shows files in a directory
+            printf("Display Files request\n");
             handle_display(client_sock, buffer);
         } else {
             // If the command is unknown, print an error message
@@ -151,6 +155,7 @@ void handle_ufile(int client_sock, char *command, char *file_data) {
 
         // Send confirmation to the client
         const char *success_message = "File Uploaded successfully.";
+        printf("Sending responce to Smain.\n%s\n",success_message);
         send(client_sock, success_message, strlen(success_message), 0);
 
         // Free the memory allocated for the new file path
@@ -226,6 +231,7 @@ void handle_rmfile(int client_sock, char *command) {
         if (access(new_file_path, F_OK) == -1) {
             // Send rejction to the client
             const char *success_message = "File not found!";
+            printf("%s\n",success_message);
             send(client_sock, success_message, strlen(success_message), 0);
             return;
         }
@@ -325,10 +331,17 @@ void handle_display(int client_sock, char *command) {
         // Close the directory after reading
         closedir(dir);
     }
-    // Print the list of .txt files
-    printf("%s\n",txt_files);
-    // Send the list to the client(Smain)
-    send(client_sock, txt_files, strlen(txt_files), 0);
+
+    // If no files were found, send an error message to the client
+    if(strlen(txt_files) == 0){
+        const char *error_message = "ERROR: No files found or given path doesnot exist!";
+        printf("%s\n",error_message);
+    }else{
+        // Print the list of .txt files
+        printf("%s\n",txt_files);
+        // Send the list to the client(Smain)
+        send(client_sock, txt_files, strlen(txt_files), 0);
+    }
 }
 
 // Function to delete a file and handle errors
@@ -354,7 +367,6 @@ int delete_file(const char *file_path) {
     if (txt_path != NULL) {
         // delete the file
         if (unlink(txt_path) == 0) {
-            printf("Successfully deleted file: %s\n", full_path);
             return 0;
         } else {
             // Handle error based on errno
@@ -409,12 +421,10 @@ void send_file_back_to_smain(int smain_sock, const char *file_path, const char *
     // Send the file name
     send(smain_sock, file_name, strlen(file_name), 0);
 
-    // Read the file and send its contents to the client
+    // Read the file and send its contents to the client(Smain)
     char buffer_content[BUFSIZE];
     ssize_t bytes_read, bytes_sent;
     while ((bytes_read = read(file_fd, buffer_content, sizeof(buffer_content))) > 0) {
-        // Debug print: show the content being sent
-        printf("Read %zd bytes\n", bytes_read);
         bytes_sent = send(smain_sock, buffer_content, bytes_read, 0);
         if (bytes_sent < 0) {
             perror("Error sending file");
